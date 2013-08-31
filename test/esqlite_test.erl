@@ -7,20 +7,23 @@
 -include_lib("eunit/include/eunit.hrl").
 
 open_single_database_test() ->
+    esqlite3:init(2),
     {ok, _C1} = esqlite3:open("test.db"),
     ok.
 
-open_multiple_same_databases_test() ->
-    {ok, _C1} = esqlite3:open("test.db"),
-    {ok, _C2} = esqlite3:open("test.db"),
-    ok.
+% open_multiple_same_databases_test() ->
+%     {ok, _C1} = esqlite3:open("test.db"),
+%     {ok, _C2} = esqlite3:open("test.db"),
+%     ok.
 
 open_multiple_different_databases_test() ->
+    esqlite3:init(2),
     {ok, _C1} = esqlite3:open("test1.db"),
     {ok, _C2} = esqlite3:open("test2.db"),
     ok.
 
 simple_query_test() ->
+    esqlite3:init(2),
     {ok, Db} = esqlite3:open(":memory:"),
     ok = esqlite3:exec("begin;", Db),
     ok = esqlite3:exec("create table test_table(one varchar(10), two int);", Db),
@@ -33,6 +36,7 @@ simple_query_test() ->
     ok.
 
 prepare_test() ->
+    esqlite3:init(2),
     {ok, Db} = esqlite3:open(":memory:"),
     esqlite3:exec("begin;", Db),
     esqlite3:exec("create table test_table(one varchar(10), two int);", Db),
@@ -50,6 +54,7 @@ prepare_test() ->
     ok.
 
 bind_test() ->
+    esqlite3:init(2),
     {ok, Db} = esqlite3:open(":memory:"),
     
     ok = esqlite3:exec("begin;", Db),
@@ -95,6 +100,7 @@ bind_test() ->
     ok.
 
 bind_for_queries_test() ->
+    esqlite3:init(2),
     {ok, Db} = esqlite3:open(":memory:"),
     
     ok = esqlite3:exec("begin;", Db),
@@ -113,6 +119,7 @@ bind_for_queries_test() ->
     ok.
 
 column_names_test() ->
+    esqlite3:init(2),
     {ok, Db} = esqlite3:open(":memory:"),
     ok = esqlite3:exec("begin;", Db),
     ok = esqlite3:exec("create table test_table(one varchar(10), two int);", Db),
@@ -126,6 +133,7 @@ column_names_test() ->
     ok.
 
 foreach_test() ->
+    esqlite3:init(2),
     {ok, Db} = esqlite3:open(":memory:"),
     ok = esqlite3:exec("begin;", Db),
     ok = esqlite3:exec("create table test_table(one varchar(10), two int);", Db),
@@ -154,6 +162,7 @@ foreach_test() ->
     ok.
 
 map_test() ->
+    esqlite3:init(2),
     {ok, Db} = esqlite3:open(":memory:"),
     ok = esqlite3:exec("begin;", Db),
     ok = esqlite3:exec("create table test_table(one varchar(10), two int);", Db),
@@ -178,19 +187,22 @@ map_test() ->
      [{one,<<"hello3">>},{two,12}],
      [{one,<<"hello4">>},{two,13}]]  = esqlite3:map(Assoc, "select * from test_table", Db),
     
+    ?debugFmt("exec2 ~p~n", [esqlite3:exec_script("savepoint 'adb';SELECT * FROM test_table;insert into test_table values ('exec2',100);release savepoint 'adb';",Db)]),
+
     ok.
 
 error1_msg_test() ->
-    {ok, Db} = esqlite3:open(":memory:"),
+    esqlite3:init(2),
+    % {ok, Db} = esqlite3:open(":memory:"),
     
-    %% Not sql.
-    {error, {sqlite_error, _Msg1}} = esqlite3:exec("dit is geen sql", Db),
+    % %% Not sql.
+    % {error, {sqlite_error, _Msg1}} = esqlite3:exec("dit is geen sql", Db),
     
-    %% Database test does not exist.
-    {error, {sqlite_error, _Msg2}} = esqlite3:exec("select * from test;", Db),
+    % %% Database test does not exist.
+    % {error, {sqlite_error, _Msg2}} = esqlite3:exec("select * from test;", Db),
     
-    %% Opening non-existant database.
-    {error, {cantopen, _Msg3}} = esqlite3:open("/dit/bestaat/niet"),
+    % %% Opening non-existant database.
+    % {error, {cantopen, _Msg3}} = esqlite3:open("/dit/bestaat/niet"),
     ok.
     
     

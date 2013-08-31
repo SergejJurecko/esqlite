@@ -18,3 +18,11 @@ process. This is done by handling all commands from erlang within a
 lightweight thread. The erlang scheduler will get control back when
 the command has been added to the command-queue of the thread.
 
+
+Fork changes
+-----------------
+
+- Uses a fixed threading model instead of a new thread for every db connection.
+Init call sets number of threads, every open call can set which thread 
+that particular sqlite connection should execute on.
+- Added exec_script which will execute multiple statements at once and return proper values (not just ok).

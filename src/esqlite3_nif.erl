@@ -21,32 +21,42 @@
 -author("Maas-Maarten Zeeman <mmzeeman@xs4all.nl>").
 
 %% low-level exports
--export([start/0, 
+-export([init/1,
          open/4, 
          exec/4, 
+         exec_script/4, 
          prepare/4,
          step/3,
          finalize/3,
          bind/4,
          column_names/3,
-         close/3
+         close/3,
+         noop/3
 ]).
 
--on_load(init/0).
+noop(_,_,_) ->
+    exit(nif_library_not_loaded).
 
-init() ->
+init(Threads) when is_integer(Threads) ->
     NifName = "esqlite3_nif",
     NifFileName = case code:priv_dir(esqlite) of
         {error, bad_name} -> filename:join("priv", NifName);
         Dir -> filename:join(Dir, NifName)
     end,
-    ok = erlang:load_nif(NifFileName, 0).
+    case erlang:load_nif(NifFileName, Threads) of
+        ok ->
+            ok;
+        {error,{upgrade,_}} ->
+            ok;
+        {error,{reload,_}} ->
+            ok
+    end.
 
 %% @doc Start a low level thread which will can handle sqlite3 calls. 
 %%
 %% @spec start() -> {ok, connection()} | {error, msg()}
-start() ->
-    exit(nif_library_not_loaded).
+% start() ->
+%     exit(nif_library_not_loaded).
 
 %% @doc Open the specified sqlite3 database.
 %% 
@@ -54,7 +64,7 @@ start() ->
 %% ok immediately. When the database is opened 
 %%
 %%  @spec open(connection(), reference(), pid(), string()) -> ok | {error, message()}
-open(_Db, _Ref, _Dest, _Filename) ->
+open(_Ref, _Dest, _Filename,_ThreadNumber) ->
     exit(nif_library_not_loaded).
 
 %% @doc Exec the query.
@@ -67,6 +77,18 @@ open(_Db, _Ref, _Dest, _Filename) ->
 %%
 %%  @spec exec(connection(), Ref::reference(), Dest::pid(), string()) -> ok | {error, message()}
 exec(_Db, _Ref, _Dest, _Sql) ->
+    exit(nif_library_not_loaded).
+
+%% @doc Exec the query.
+%% 
+%% Sends an asynchronous exec command over the connection and returns
+%% ok immediately.
+%%
+%% When the statement is executed Dest will receive message {Ref, answer()}
+%% with answer() {rowid,Rowid} | {Columns,Rows} | ok | {error, reason()}
+%%
+%%  @spec exec(connection(), Ref::reference(), Dest::pid(), string()) -> ok | {error, message()}
+exec_script(_Db, _Ref, _Dest, _Sql) ->
     exit(nif_library_not_loaded).
 
 %% @doc

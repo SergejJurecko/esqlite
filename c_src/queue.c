@@ -41,6 +41,7 @@ queue_create()
     ret->message = NULL;
     ret->length = 0;
 
+
     ret->lock = enif_mutex_create("queue_lock");
     if(ret->lock == NULL) goto error;
     

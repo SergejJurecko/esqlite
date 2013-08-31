@@ -21,47 +21,51 @@
 -author("Maas-Maarten Zeeman <mmzeeman@xs4all.nl>").
 
 %% higher-level export
--export([open/1, open/2, 
-         exec/2, exec/3,
-         prepare/2, prepare/3, 
-         step/1, step/2, 
-         bind/2, bind/3, 
+-export([init/1,noop/1,
+         open/1,open/2,
+         exec/2,
+         exec_script/2,
+         prepare/2, 
+         step/1, 
+         bind/2, 
          fetchone/1,
          fetchall/1,
-         column_names/1, column_names/2,
-         close/1, close/2]).
+         column_names/1,
+         close/1]).
 
 -export([q/2, q/3, map/3, foreach/3]).
-
--define(DEFAULT_TIMEOUT, 5000).
 
 %% 
 -type connection() :: tuple().
 -type statement() :: term().
 -type sql() :: iolist().
 
-%% @doc Opens a sqlite3 database mentioned in Filename.
+
+%% @doc Opens a sqlite3 database mentioned in Filename on first thread.
 %%
 -spec open(FileName) -> {ok, connection()} | {error, _} when
     FileName :: string().
 open(Filename) ->
-    open(Filename, ?DEFAULT_TIMEOUT).
+    open(Filename,0).
 
-%% @doc Open a database connection
+%% @doc Opens a sqlite3 database mentioned in Filename on thread ThreadNumber (valid ranges 0 - (InitThreads-1)).
 %%
--spec open(Filename, timeout()) -> {ok, connection()} | {error, _} when
-    Filename :: string().
-open(Filename, Timeout) ->
-    {ok, Connection} = esqlite3_nif:start(),
-
+-spec open(FileName,ThreadNumber) -> {ok, connection()} | {error, _} when
+    FileName :: string(), ThreadNumber :: integer().
+open(Filename,ThreadNumber) ->
     Ref = make_ref(),
-    ok = esqlite3_nif:open(Connection, Ref, self(), Filename),
-    case receive_answer(Ref, Timeout) of
+    {ok,Connection} = esqlite3_nif:open(Ref, self(), Filename,ThreadNumber),
+    case receive_answer(Ref) of
         ok ->
-            {ok, {connection, make_ref(), Connection}};
+            {ok, {connection, make_ref(),Connection}};
         {error, _Msg}=Error ->
             Error
     end.
+
+-spec init(Threads) -> ok when
+    Threads :: integer().
+init(Threads) ->
+    esqlite3_nif:init(Threads).
 
 %% @doc Execute a sql statement, returns a list with tuples.
 -spec q(sql(), connection()) -> list(tuple()).
@@ -188,95 +192,71 @@ try_step(Statement, Tries) ->
 %% @doc Execute Sql statement, returns the number of affected rows.
 %%
 %% @spec exec(iolist(), connection()) -> integer() |  {error, error_message()}
-exec(Sql, Connection) ->
-    exec(Sql, Connection, ?DEFAULT_TIMEOUT).
-
-%% @doc Execute 
-%%
-%% @spec exec(iolist(), connection(), timeout()) -> integer() | {error, error_message()}
-exec(Sql, {connection, _Ref, Connection}, Timeout) ->
+exec(Sql,  {connection, _Ref, Connection}) ->
     Ref = make_ref(),
     ok = esqlite3_nif:exec(Connection, Ref, self(), add_eos(Sql)),
-    receive_answer(Ref, Timeout).
+    receive_answer(Ref).
+
+noop({connection, _Ref, Connection}) ->
+    Ref = make_ref(),
+    ok = esqlite3_nif:noop(Connection, Ref, self()),
+    receive_answer(Ref).
+
+%% @doc Execute Sql statement, returns: {rowid,Rowid} | {Columns,Rows} | ok | {error, reason()}
+%% Rows will be in reverse order.
+%% @spec exec(iolist(), connection()) -> integer() |  {error, error_message()}
+exec_script(Sql,  {connection, _Ref, Connection}) ->
+    Ref = make_ref(),
+    ok = esqlite3_nif:exec_script(Connection, Ref, self(), add_eos(Sql)),
+    receive_answer(Ref).
 
 %% @doc Prepare a statement
 %%
 %% @spec prepare(iolist(), connection()) -> {ok, prepared_statement()} | {error, error_message()}
-prepare(Sql, Connection) ->
-    prepare(Sql, Connection, ?DEFAULT_TIMEOUT).
-
-%% @doc
-%%
-%% @spec(iolist(), connection(), timeout()) -> {ok, prepared_statement()} | {error, error_message()}
-prepare(Sql, {connection, _Ref, Connection}, Timeout) ->
+prepare(Sql,  {connection, _Ref, Connection}) ->
     Ref = make_ref(),
     ok = esqlite3_nif:prepare(Connection, Ref, self(), add_eos(Sql)),
-    receive_answer(Ref, Timeout).
+    receive_answer(Ref).
 
 %% @doc Step
 %%
 %% @spec step(prepared_statement()) -> tuple()
 step(Stmt) ->
-    step(Stmt, ?DEFAULT_TIMEOUT).
-
-%% @doc 
-%%
-%% @spec step(prepared_statement(), timeout()) -> tuple()
-step(Stmt, Timeout) ->
     Ref = make_ref(),
     ok = esqlite3_nif:step(Stmt, Ref, self()),
-    receive_answer(Ref, Timeout).
+    receive_answer(Ref).
 
 %% @doc Bind values to prepared statements
 %%
 %% @spec bind(prepared_statement(), value_list()) -> ok | {error, error_message()}
 bind(Stmt, Args) ->
-    bind(Stmt, Args, ?DEFAULT_TIMEOUT).
-
-%% @doc Bind values to prepared statements
-%%
-%% @spec bind(prepared_statement(), [], timeout()) -> ok | {error, error_message()}
-bind(Stmt, Args, Timeout) ->
     Ref = make_ref(),
     ok = esqlite3_nif:bind(Stmt, Ref, self(), Args),
-    receive_answer(Ref, Timeout).
+    receive_answer(Ref).
 
 %% @doc Return the column names of the prepared statement.
 %%
 -spec column_names(statement()) -> tuple(atom()).
 column_names(Stmt) ->
-    column_names(Stmt, ?DEFAULT_TIMEOUT).
-
--spec column_names(statement(), timeout()) -> tuple(atom()).
-column_names(Stmt, Timeout) ->
     Ref = make_ref(),
     ok = esqlite3_nif:column_names(Stmt, Ref, self()),
-    receive_answer(Ref, Timeout).
+    receive_answer(Ref).
 
 %% @doc Close the database
 %%
 %% @spec close(connection()) -> ok | {error, error_message()}
 -spec close(connection()) -> ok | {error, _}.
-close(Connection) ->
-    close(Connection, ?DEFAULT_TIMEOUT).
-
-%% @doc Close the database
-%%
-%% @spec close(connection(), integer()) -> ok | {error, error_message()}
--spec close(connection(), timeout()) -> ok | {error, _}.
-close({connection, _Ref, Connection}, Timeout) ->
+close( {connection, _Ref, Connection}) ->
     Ref = make_ref(),
     ok = esqlite3_nif:close(Connection, Ref, self()),
-    receive_answer(Ref, Timeout).
+    receive_answer(Ref).
 
 %% Internal functions
 add_eos(IoList) ->
     [IoList, 0].
 
-receive_answer(Ref, Timeout) ->
+receive_answer(Ref) ->
     receive 
         {Ref, Resp} -> Resp;
         Other -> throw(Other)
-    after Timeout ->
-        throw({error, timeout, Ref})
     end.
