@@ -257,6 +257,5 @@ add_eos(IoList) ->
 
 receive_answer(Ref) ->
     receive 
-        {Ref, Resp} -> Resp;
-        Other -> throw(Other)
+        {Ref, Resp} -> Resp
     end.
