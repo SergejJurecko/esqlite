@@ -354,7 +354,7 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
         if (rc == SQLITE_ERROR)
             break;
         
-        if (rowcount > 0)
+        if (rowcount > 0 || column_count > 0)
             results = enif_make_list_cell(cmd->env, enif_make_list2(cmd->env,enif_make_tuple2(cmd->env,atom_columns,column_names),
                                                                       enif_make_tuple2(cmd->env,atom_rows,rows)), 
                                     results);
