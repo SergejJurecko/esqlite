@@ -377,8 +377,8 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
             {
                 results = enif_make_list_cell(cmd->env, atom_ok, results);
             }
-            sqlite3_finalize(statement);
         }
+        sqlite3_finalize(statement);
     }
    
     enif_release_resource(cmd->conn);
@@ -388,16 +388,6 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
     {
         return make_ok_tuple(cmd->env,results);
     }
-    // if (isinsert)
-    //     return enif_make_tuple2(cmd->env,
-    //                             enif_make_atom(cmd->env,"rowid"),
-    //                             enif_make_uint64(cmd->env,sqlite3_last_insert_rowid(cmd->conn->db)));
-    // else if (column_count == 0)
-    //     return atom_ok;
-    // else
-    //     return enif_make_list2(cmd->env,
-    //                        enif_make_tuple2(cmd->env,atom_columns,columnlist),
-    //                        enif_make_tuple2(cmd->env,atom_rows,rows));
 }
 
 /*
