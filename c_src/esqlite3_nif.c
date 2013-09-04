@@ -315,7 +315,8 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
     ERL_NIF_TERM column_names;
     ERL_NIF_TERM results;
 
-    enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin);
+    if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin))
+        return make_error_tuple(cmd->env, "not iolist");
     end = (char*)bin.data + bin.size - 1;
     readpoint = (char*)bin.data;
     results = enif_make_list(cmd->env,0);
