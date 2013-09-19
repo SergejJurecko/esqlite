@@ -317,13 +317,18 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
 
     if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin))
         return make_error_tuple(cmd->env, "not iolist");
-    end = (char*)bin.data + bin.size - 1;
+    end = (char*)bin.data + bin.size;
     readpoint = (char*)bin.data;
     results = enif_make_list(cmd->env,0);
+    char skip = 0;
 
     while (readpoint < end)
     {
-        rc = sqlite3_prepare_v2(cmd->conn->db, (char *)readpoint, end-readpoint, &(statement), &readpoint);
+        if (readpoint[0] == '$')
+            skip = 1;
+        else
+            skip = 0;
+        rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), end-readpoint, &(statement), &readpoint);
         if(rc != SQLITE_OK)
             break;
          
@@ -355,11 +360,11 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
         if (rc == SQLITE_ERROR)
             break;
         
-        if (rowcount > 0 || column_count > 0)
+        if (skip == 0 && (rowcount > 0 || column_count > 0))
             results = enif_make_list_cell(cmd->env, enif_make_list2(cmd->env,enif_make_tuple2(cmd->env,atom_columns,column_names),
                                                                       enif_make_tuple2(cmd->env,atom_rows,rows)), 
                                     results);
-        else
+        else if (skip == 0)
         {
             const char* sql = sqlite3_sql(statement);
             if (    (sql[0] == 'i' || sql[0] == 'I') &&

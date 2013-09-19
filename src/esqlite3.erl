@@ -207,7 +207,7 @@ noop({connection, _Ref, Connection}) ->
 %% @spec exec(iolist(), connection()) -> integer() |  {error, error_message()}
 exec_script(Sql,  {connection, _Ref, Connection}) ->
     Ref = make_ref(),
-    ok = esqlite3_nif:exec_script(Connection, Ref, self(), add_eos(Sql)),
+    ok = esqlite3_nif:exec_script(Connection, Ref, self(), Sql),
     receive_answer(Ref).
 
 %% @doc Prepare a statement
