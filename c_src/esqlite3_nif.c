@@ -538,9 +538,9 @@ make_cell(ErlNifEnv *env, sqlite3_stmt *statement, unsigned int i)
     case SQLITE_FLOAT:
 	    return enif_make_double(env, sqlite3_column_double(statement, i));
     case SQLITE_BLOB:
-        return enif_make_tuple2(env, make_atom(env, "blob"), 
+        return //enif_make_tuple2(env, make_atom(env, "blob"), 
             make_binary(env, sqlite3_column_blob(statement, i), 
-                sqlite3_column_bytes(statement, i)));
+                sqlite3_column_bytes(statement, i));
     case SQLITE_NULL:
 	    return atom_undefined;
     case SQLITE_TEXT:
@@ -771,7 +771,6 @@ esqlite_exec(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	    return enif_make_badarg(env);  
     if(!enif_get_resource(env, argv[0], esqlite_connection_type, (void **) &db))
     {
-        printf("EXEC CANT RESOURCE\r\n");
         return enif_make_badarg(env);
     }
         
