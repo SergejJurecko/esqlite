@@ -23,6 +23,7 @@
 %% low-level exports
 -export([init/1,
          open/4, 
+         open/5,
          exec/4, 
          exec_script/4, 
          prepare/4,
@@ -65,6 +66,8 @@ init(Threads) when is_integer(Threads) ->
 %%
 %%  @spec open(connection(), reference(), pid(), string()) -> ok | {error, message()}
 open(_Ref, _Dest, _Filename,_ThreadNumber) ->
+    exit(nif_library_not_loaded).
+open(_Ref, _Dest, _Filename,_ThreadNumber,_Sql) ->
     exit(nif_library_not_loaded).
 
 %% @doc Exec the query.

@@ -82,6 +82,7 @@ typedef struct {
     ERL_NIF_TERM ref; 
     ErlNifPid pid;
     ERL_NIF_TERM arg;
+    ERL_NIF_TERM arg1;
     sqlite3_stmt *stmt;
     esqlite_connection *conn;
     // only used for close
@@ -276,8 +277,13 @@ do_open(esqlite_command *cmd, esqlite_thread *thread)
     }
     cmd->conn->open = 1;
 
-    enif_release_resource(cmd->conn);
-    return make_atom(cmd->env, "ok");
+    if (cmd->arg1 == 0)
+    {
+        enif_release_resource(cmd->conn);
+        return atom_ok;
+    }
+    else
+        return 0;
 }
 
 /* 
@@ -295,8 +301,7 @@ do_exec(esqlite_command *cmd, esqlite_thread *thread)
 	    return make_sqlite3_error_tuple(cmd->env,"sqlite3_exec in do_exec", rc, cmd->conn->db);
     enif_release_resource(cmd->conn);
 
-    // return atom_ok;
-    return make_atom(cmd->env, "ok");
+    return atom_ok;
 }
 
 /* 
@@ -328,6 +333,7 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
             skip = 1;
         else
             skip = 0;
+
         rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), end-readpoint, &(statement), &readpoint);
         if(rc != SQLITE_OK)
             break;
@@ -645,7 +651,16 @@ evaluate_command(esqlite_command *cmd,esqlite_thread *thread)
 {
     switch(cmd->type) {
     case cmd_open:
-	    return do_open(cmd,thread);
+    {
+        ERL_NIF_TERM res = do_open(cmd,thread);
+        if (res != 0 || cmd->conn->open == 0)
+            return res;
+        else
+        {
+            cmd->arg = cmd->arg1;
+            return do_exec_script(cmd,thread);
+        }
+    }
     case cmd_exec:
 	    return do_exec(cmd,thread);
     case cmd_exec_script:
@@ -688,7 +703,6 @@ make_answer(esqlite_command *cmd, ERL_NIF_TERM answer)
 static void *
 esqlite_thread_func(void *arg)
 {
-    // esqlite_connection *db = (esqlite_connection *) arg;
     esqlite_thread* data = (esqlite_thread*)arg;
     data->alive = 1;
     esqlite_command *cmd;
@@ -724,7 +738,7 @@ esqlite_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     esqlite_command *cmd = NULL;
     ErlNifPid pid;
      
-    if(argc != 4) 
+    if(!(argc == 4 || argc == 5)) 
 	    return enif_make_badarg(env);     
     if(!enif_is_ref(env, argv[0])) 
 	    return make_error_tuple(env, "invalid_ref");
@@ -732,9 +746,6 @@ esqlite_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 	    return make_error_tuple(env, "invalid_pid");
 
     esqlite_connection* conn = enif_alloc_resource(esqlite_connection_type, sizeof(esqlite_connection));
-    // enif_mutex_lock(g_dbcount_mutex);
-    // conn->thread = g_dbcount++;
-    // enif_mutex_unlock(g_dbcount_mutex);
     if(!enif_get_uint(env, argv[3], &(conn->thread))) 
         return make_error_tuple(env, "invalid_thread_number");
     conn->thread %= g_nthreads;
@@ -751,6 +762,10 @@ esqlite_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     cmd->ref = enif_make_copy(cmd->env, argv[0]);
     cmd->pid = pid;
     cmd->arg = enif_make_copy(cmd->env, argv[2]);
+    if (argc == 5)
+        cmd->arg1 = enif_make_copy(cmd->env, argv[4]);
+    else
+        cmd->arg1 = 0;
     cmd->conn = conn;
 
     ERL_NIF_TERM db_conn = enif_make_resource(env, conn);
@@ -1090,6 +1105,7 @@ on_unload(ErlNifEnv* env, void* priv_data)
 
 static ErlNifFunc nif_funcs[] = {
     {"open", 4, esqlite_open},
+    {"open", 5, esqlite_open},
     {"exec", 4, esqlite_exec},
     {"exec_script", 4, esqlite_exec_script},
     {"prepare", 4, esqlite_prepare},

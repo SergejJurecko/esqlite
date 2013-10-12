@@ -11,6 +11,11 @@ open_single_database_test() ->
     {ok, _C1} = esqlite3:open("test.db"),
     ok.
 
+open_with_sql_test() ->
+    esqlite3:init(2),
+    {ok, _C1,[[{columns,_},{rows,[]}]]} = esqlite3:open("test.db",1,<<"select name, sql from sqlite_master where type='table';">>),
+    ok.
+
 % open_multiple_same_databases_test() ->
 %     {ok, _C1} = esqlite3:open("test.db"),
 %     {ok, _C2} = esqlite3:open("test.db"),
@@ -90,7 +95,7 @@ bind_test() ->
         esqlite3:q("select one, two from test_table where two = 8", Db)),
     ?assertEqual([{<<"nine">>, 10}], 
         esqlite3:q("select one, two from test_table where two = 10", Db)),
-    ?assertEqual([{{blob, <<$e,$l,$e,$v,$e,$n,0>>}, 12}], 
+    ?assertEqual([{<<$e,$l,$e,$v,$e,$n,0>>, 12}], 
         esqlite3:q("select one, two from test_table where two = 12", Db)),
 
     %% utf-8

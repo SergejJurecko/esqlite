@@ -22,7 +22,7 @@
 
 %% higher-level export
 -export([init/1,noop/1,
-         open/1,open/2,
+         open/1,open/2,open/3,
          exec/2,
          exec_script/2,
          prepare/2, 
@@ -56,6 +56,19 @@ open(Filename,ThreadNumber) ->
     Ref = make_ref(),
     {ok,Connection} = esqlite3_nif:open(Ref, self(), Filename,ThreadNumber),
     case receive_answer(Ref) of
+        {ok,[]} ->
+            {ok, {connection, make_ref(),Connection}};
+        ok ->
+            {ok, {connection, make_ref(),Connection}};
+        {error, _Msg}=Error ->
+            Error
+    end.
+open(Filename,ThreadNumber,Sql) ->
+    Ref = make_ref(),
+    {ok,Connection} = esqlite3_nif:open(Ref, self(), Filename,ThreadNumber,Sql),
+    case receive_answer(Ref) of
+        {ok,Res} ->
+            {ok, {connection, make_ref(),Connection},Res};
         ok ->
             {ok, {connection, make_ref(),Connection}};
         {error, _Msg}=Error ->
