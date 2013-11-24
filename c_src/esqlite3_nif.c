@@ -330,13 +330,18 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
     while (readpoint < end)
     {
         if (readpoint[0] == '$')
+        {
             skip = 1;
+        }
         else
             skip = 0;
 
         rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), end-readpoint, &(statement), &readpoint);
         if(rc != SQLITE_OK)
+        {
+            rc = SQLITE_ERROR;
             break;
+        }
          
         column_count = sqlite3_column_count(statement);
         array = (ERL_NIF_TERM *)malloc(sizeof(ERL_NIF_TERM) * column_count);
