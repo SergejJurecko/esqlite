@@ -31,7 +31,8 @@
          fetchone/1,
          fetchall/1,
          column_names/1,
-         close/1]).
+         close/1,
+         parse_helper/1,parse_helper/2]).
 
 -export([q/2, q/3, map/3, foreach/3]).
 
@@ -40,6 +41,10 @@
 -type statement() :: term().
 -type sql() :: iolist().
 
+parse_helper(Bin) ->
+    parse_helper(Bin,0).
+parse_helper(Bin,Offset) ->
+    esqlite3_nif:parse_helper(Bin,Offset).
 
 %% @doc Opens a sqlite3 database mentioned in Filename on first thread.
 %%

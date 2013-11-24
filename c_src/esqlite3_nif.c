@@ -392,7 +392,7 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
         }
         sqlite3_finalize(statement);
     }
-   
+    
     enif_release_resource(cmd->conn);
     if (rc == SQLITE_ERROR)
         return make_sqlite3_error_tuple(cmd->env, "exec_script", rc, cmd->conn->db);
@@ -726,6 +726,40 @@ esqlite_thread_func(void *arg)
   
     data->alive = 0;
     return NULL;
+}
+
+static ERL_NIF_TERM
+parse_helper(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    ErlNifBinary bin;
+    unsigned int offset = 0;
+    if (argc != 2)
+        return enif_make_badarg(env);
+
+    if (!enif_inspect_binary(env, argv[0], &bin))
+        return enif_make_badarg(env);
+    if (!enif_get_uint(env, argv[1], &offset)) 
+        return enif_make_badarg(env);
+
+    char instr = 0;
+    for (;offset < bin.size;offset++)
+    {
+        if (bin.data[offset] == '\'')
+            instr = !instr;
+        // If ; outside of string, return offset
+        else if (bin.data[offset] == ';' && !instr)
+        {
+            return enif_make_uint(env,offset);
+        }
+        // If {{ return offset
+        else if (bin.data[offset] == '{' && offset+1 < bin.size)
+        {
+            if (bin.data[offset+1] == '{')
+                return enif_make_uint(env,offset);
+        }
+    }
+
+    return atom_ok;
 }
 
 
@@ -1113,6 +1147,7 @@ static ErlNifFunc nif_funcs[] = {
     {"noop", 3, esqlite_noop},
     // TODO: {"esqlite_bind", 3, esqlite_bind_named},
     {"bind", 4, esqlite_bind},
+    {"parse_helper",2,parse_helper},
     {"column_names", 3, esqlite_column_names},
     {"close", 3, esqlite_close}
 };

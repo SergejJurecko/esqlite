@@ -32,10 +32,14 @@
          bind/4,
          column_names/3,
          close/3,
-         noop/3
+         noop/3,
+         parse_helper/2
 ]).
 
 noop(_,_,_) ->
+    exit(nif_library_not_loaded).
+
+parse_helper(_,_) ->
     exit(nif_library_not_loaded).
 
 init(Threads) when is_integer(Threads) ->
