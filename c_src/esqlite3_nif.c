@@ -762,6 +762,11 @@ parse_helper(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
             if (bin.data[offset+1] == '{')
                 return enif_make_uint(env,offset);
         }
+        else if (bin.data[offset] == '/' && offset+1 < bin.size && !instr)
+        {
+            if (bin.data[offset+1] == '*')
+                return enif_make_uint(env,offset);
+        }
     }
 
     return atom_ok;
