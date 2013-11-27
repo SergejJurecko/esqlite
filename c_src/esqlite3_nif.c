@@ -549,9 +549,9 @@ make_cell(ErlNifEnv *env, sqlite3_stmt *statement, unsigned int i)
     case SQLITE_FLOAT:
 	    return enif_make_double(env, sqlite3_column_double(statement, i));
     case SQLITE_BLOB:
-        return //enif_make_tuple2(env, make_atom(env, "blob"), 
-            make_binary(env, sqlite3_column_blob(statement, i), 
-                sqlite3_column_bytes(statement, i));
+        return enif_make_tuple2(env, make_atom(env, "blob"), 
+                make_binary(env, sqlite3_column_blob(statement, i), 
+                    sqlite3_column_bytes(statement, i)));
     case SQLITE_NULL:
 	    return atom_undefined;
     case SQLITE_TEXT:
@@ -749,7 +749,7 @@ parse_helper(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     char instr = 0;
     for (;offset < bin.size;offset++)
     {
-        if (bin.data[offset] == '\'')
+        if (bin.data[offset] == '\'' || bin.data[offset] == '`')
             instr = !instr;
         // If ; outside of string, return offset
         else if (bin.data[offset] == ';' && !instr)
