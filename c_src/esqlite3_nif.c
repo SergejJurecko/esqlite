@@ -335,7 +335,6 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
         }
         else
             skip = 0;
-
         rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), end-readpoint, &(statement), &readpoint);
         if(rc != SQLITE_OK)
         {
@@ -387,8 +386,8 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
                     (sql[6] == ' '))
             {
                 results = enif_make_list_cell(cmd->env, enif_make_tuple2(cmd->env,atom_rowid,
-                                                                         enif_make_int64(cmd->env,sqlite3_last_insert_rowid(cmd->conn->db))), 
-                                                        results);
+                                             enif_make_int64(cmd->env,sqlite3_last_insert_rowid(cmd->conn->db))), 
+                                            results);
             }
             else
             {
