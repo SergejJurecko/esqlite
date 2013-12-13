@@ -192,6 +192,7 @@ map_test() ->
      [{one,<<"hello3">>},{two,12}],
      [{one,<<"hello4">>},{two,13}]]  = esqlite3:map(Assoc, "select * from test_table", Db),
     
+    ?debugFmt("~p",[esqlite3:exec_script(";;;;;select * from test_table;;;;;",Db)]),
     ?debugFmt("exec2 ~p~n", [esqlite3:exec_script("savepoint 'adb';SELECT * FROM test_table;insert into test_table values ('exec2',100);release savepoint 'adb';",Db)]),
 
     ok.

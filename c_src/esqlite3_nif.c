@@ -374,16 +374,17 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
             results = enif_make_list_cell(cmd->env, enif_make_list2(cmd->env,enif_make_tuple2(cmd->env,atom_columns,column_names),
                                                                       enif_make_tuple2(cmd->env,atom_rows,rows)), 
                                     results);
-        else if (skip == 0)
+        else if (skip == 0 && (end-readpoint) > 6)
         {
             const char* sql = sqlite3_sql(statement);
-            if (    (sql[0] == 'i' || sql[0] == 'I') &&
-                    (sql[1] == 'n' || sql[1] == 'N') &&
-                    (sql[2] == 's' || sql[2] == 'S') &&
-                    (sql[3] == 'e' || sql[3] == 'E') &&
-                    (sql[4] == 'r' || sql[4] == 'R') &&
-                    (sql[5] == 't' || sql[5] == 'T') &&
-                    (sql[6] == ' '))
+            if ( (end-readpoint) > 6 &&
+                (sql[0] == 'i' || sql[0] == 'I') &&
+                (sql[1] == 'n' || sql[1] == 'N') &&
+                (sql[2] == 's' || sql[2] == 'S') &&
+                (sql[3] == 'e' || sql[3] == 'E') &&
+                (sql[4] == 'r' || sql[4] == 'R') &&
+                (sql[5] == 't' || sql[5] == 'T') &&
+                (sql[6] == ' '))
             {
                 results = enif_make_list_cell(cmd->env, enif_make_tuple2(cmd->env,atom_rowid,
                                              enif_make_int64(cmd->env,sqlite3_last_insert_rowid(cmd->conn->db))), 
