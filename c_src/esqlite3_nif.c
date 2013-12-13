@@ -377,8 +377,7 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
         else if (skip == 0 && (end-readpoint) > 6)
         {
             const char* sql = sqlite3_sql(statement);
-            if ( (end-readpoint) > 6 &&
-                (sql[0] == 'i' || sql[0] == 'I') &&
+            if ((sql[0] == 'i' || sql[0] == 'I') &&
                 (sql[1] == 'n' || sql[1] == 'N') &&
                 (sql[2] == 's' || sql[2] == 'S') &&
                 (sql[3] == 'e' || sql[3] == 'E') &&
