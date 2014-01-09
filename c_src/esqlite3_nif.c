@@ -335,7 +335,8 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
         }
         else
             skip = 0;
-        rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), end-readpoint, &(statement), &readpoint);
+        int statementlen = end-readpoint;
+        rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, &(statement), &readpoint);
         if(rc != SQLITE_OK)
         {
             rc = SQLITE_ERROR;
@@ -374,7 +375,7 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
             results = enif_make_list_cell(cmd->env, enif_make_list2(cmd->env,enif_make_tuple2(cmd->env,atom_columns,column_names),
                                                                       enif_make_tuple2(cmd->env,atom_rows,rows)), 
                                     results);
-        else if (skip == 0 && (end-readpoint) > 6)
+        else if (skip == 0 && statementlen > 6)
         {
             const char* sql = sqlite3_sql(statement);
             if ((sql[0] == 'i' || sql[0] == 'I') &&
