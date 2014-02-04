@@ -92,7 +92,7 @@ exec(_Db, _Ref, _Dest, _Sql) ->
 %% ok immediately.
 %%
 %% When the statement is executed Dest will receive message {Ref, answer()}
-%% with answer() {rowid,Rowid} | {Columns,Rows} | ok | {error, reason()}
+%% with answer() {changes,Rowid,NumChanges} | {Columns,Rows} | ok | {error, reason()}
 %%
 %%  @spec exec(connection(), Ref::reference(), Dest::pid(), string()) -> ok | {error, message()}
 exec_script(_Db, _Ref, _Dest, _Sql) ->

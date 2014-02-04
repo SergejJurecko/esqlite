@@ -220,7 +220,7 @@ noop({connection, _Ref, Connection}) ->
     ok = esqlite3_nif:noop(Connection, Ref, self()),
     receive_answer(Ref).
 
-%% @doc Execute Sql statement, returns: {rowid,Rowid} | {Columns,Rows} | ok | {error, reason()}
+%% @doc Execute Sql statement, returns: {changes,LastRowid,NumChanges} | {Columns,Rows} | ok | {error, reason()}
 %% Rows will be in reverse order.
 %% @spec exec(iolist(), connection()) -> integer() |  {error, error_message()}
 exec_script(Sql,  {connection, _Ref, Connection}) ->

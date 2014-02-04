@@ -96,6 +96,7 @@ ERL_NIF_TERM atom_rows;
 ERL_NIF_TERM atom_columns;
 ERL_NIF_TERM atom_undefined;
 ERL_NIF_TERM atom_rowid;
+ERL_NIF_TERM atom_changes;
 static ERL_NIF_TERM make_cell(ErlNifEnv *env, sqlite3_stmt *statement, unsigned int i);
 static ERL_NIF_TERM push_command(unsigned int thread, esqlite_command *cmd);
 static ERL_NIF_TERM make_binary(ErlNifEnv *env, const void *bytes, unsigned int size);
@@ -377,23 +378,28 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
                                     results);
         else if (skip == 0 && statementlen > 6)
         {
-            const char* sql = sqlite3_sql(statement);
-            if ((sql[0] == 'i' || sql[0] == 'I') &&
-                (sql[1] == 'n' || sql[1] == 'N') &&
-                (sql[2] == 's' || sql[2] == 'S') &&
-                (sql[3] == 'e' || sql[3] == 'E') &&
-                (sql[4] == 'r' || sql[4] == 'R') &&
-                (sql[5] == 't' || sql[5] == 'T') &&
-                (sql[6] == ' '))
-            {
-                results = enif_make_list_cell(cmd->env, enif_make_tuple2(cmd->env,atom_rowid,
-                                             enif_make_int64(cmd->env,sqlite3_last_insert_rowid(cmd->conn->db))), 
+            results = enif_make_list_cell(cmd->env, enif_make_tuple3(cmd->env,atom_changes,
+                                             enif_make_int64(cmd->env,sqlite3_last_insert_rowid(cmd->conn->db)), 
+                                            enif_make_int(cmd->env,sqlite3_changes(cmd->conn->db))), 
                                             results);
-            }
-            else
-            {
-                results = enif_make_list_cell(cmd->env, atom_ok, results);
-            }
+
+            // const char* sql = sqlite3_sql(statement);
+            // if ((sql[0] == 'i' || sql[0] == 'I') &&
+            //     (sql[1] == 'n' || sql[1] == 'N') &&
+            //     (sql[2] == 's' || sql[2] == 'S') &&
+            //     (sql[3] == 'e' || sql[3] == 'E') &&
+            //     (sql[4] == 'r' || sql[4] == 'R') &&
+            //     (sql[5] == 't' || sql[5] == 'T') &&
+            //     (sql[6] == ' '))
+            // {
+            //     results = enif_make_list_cell(cmd->env, enif_make_tuple2(cmd->env,atom_rowid,
+            //                                  enif_make_int64(cmd->env,sqlite3_last_insert_rowid(cmd->conn->db))), 
+            //                                 results);
+            // }
+            // else
+            // {
+            //     results = enif_make_list_cell(cmd->env, atom_ok, results);
+            // }
         }
         sqlite3_finalize(statement);
     }
@@ -1092,6 +1098,7 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     atom_error = enif_make_atom(env,"error");
     atom_undefined = enif_make_atom(env,"undefined");
     atom_rowid = enif_make_atom(env,"rowid");
+    atom_changes = enif_make_atom(env,"changes");
 
     ErlNifResourceType *rt;
     if (!enif_get_int(env,info,&g_nthreads))
