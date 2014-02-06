@@ -22,7 +22,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
+#ifndef  _WIN32
 #include <unistd.h>
+#endif
 #include <fcntl.h>
 
 #include "queue.h"
@@ -311,7 +313,7 @@ static ERL_NIF_TERM
 do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
 {
     ErlNifBinary bin;
-    int rc,i;
+    int rc = 0,i;
     unsigned int rowcount = 0;
     sqlite3_stmt *statement;
     const char *readpoint;
@@ -320,13 +322,16 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
     ERL_NIF_TERM *array;
     ERL_NIF_TERM column_names;
     ERL_NIF_TERM results;
+    char skip = 0;
+    int statementlen = 0;
+    ERL_NIF_TERM rows;
 
     if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin))
         return make_error_tuple(cmd->env, "not iolist");
     end = (char*)bin.data + bin.size;
     readpoint = (char*)bin.data;
     results = enif_make_list(cmd->env,0);
-    char skip = 0;
+    
 
     while (readpoint < end)
     {
@@ -336,7 +341,7 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
         }
         else
             skip = 0;
-        int statementlen = end-readpoint;
+        statementlen = end-readpoint;
         rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, &(statement), &readpoint);
         if(rc != SQLITE_OK)
         {
@@ -356,7 +361,7 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
         column_names = enif_make_tuple_from_array(cmd->env, array, column_count);
         free(array);
                 
-        ERL_NIF_TERM rows = enif_make_list(cmd->env,0);
+        rows = enif_make_list(cmd->env,0);
         rowcount = 0;
         while ((rc = sqlite3_step(statement)) == SQLITE_ROW)
         {
@@ -422,7 +427,7 @@ do_prepare(esqlite_command *cmd, esqlite_thread *thread)
     esqlite_statement *stmt;
     ERL_NIF_TERM esqlite_stmt;
     const char *tail;
-    int rc;
+    int rc = 0;
 
     enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin);
 
@@ -715,8 +720,8 @@ static void *
 esqlite_thread_func(void *arg)
 {
     esqlite_thread* data = (esqlite_thread*)arg;
-    data->alive = 1;
     esqlite_command *cmd;
+    data->alive = 1;
 
     while(1) 
     {
@@ -744,6 +749,8 @@ parse_helper(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     ErlNifBinary bin;
     unsigned int offset = 0;
+    char instr = 0;
+
     if (argc != 2)
         return enif_make_badarg(env);
 
@@ -752,7 +759,6 @@ parse_helper(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if (!enif_get_uint(env, argv[1], &offset)) 
         return enif_make_badarg(env);
 
-    char instr = 0;
     for (;offset < bin.size;offset++)
     {
         if (bin.data[offset] == '\'' || bin.data[offset] == '`')
@@ -787,6 +793,8 @@ esqlite_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     esqlite_command *cmd = NULL;
     ErlNifPid pid;
+    esqlite_connection* conn;
+    ERL_NIF_TERM db_conn;
      
     if(!(argc == 4 || argc == 5)) 
 	    return enif_make_badarg(env);     
@@ -795,7 +803,7 @@ esqlite_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if(!enif_get_local_pid(env, argv[1], &pid)) 
 	    return make_error_tuple(env, "invalid_pid");
 
-    esqlite_connection* conn = enif_alloc_resource(esqlite_connection_type, sizeof(esqlite_connection));
+    conn = enif_alloc_resource(esqlite_connection_type, sizeof(esqlite_connection));
     if(!enif_get_uint(env, argv[3], &(conn->thread))) 
         return make_error_tuple(env, "invalid_thread_number");
     conn->thread %= g_nthreads;
@@ -818,7 +826,7 @@ esqlite_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         cmd->arg1 = 0;
     cmd->conn = conn;
 
-    ERL_NIF_TERM db_conn = enif_make_resource(env, conn);
+    db_conn = enif_make_resource(env, conn);
     return enif_make_tuple2(env,push_command(conn->thread, cmd),db_conn);
 }
 
@@ -1091,6 +1099,9 @@ esqlite_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 static int 
 on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
 {
+    ErlNifResourceType *rt;
+    int i = 0;
+
     atom_false = enif_make_atom(env,"false");
     atom_ok = enif_make_atom(env,"ok");
     atom_rows = enif_make_atom(env,"rows");
@@ -1099,8 +1110,7 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     atom_undefined = enif_make_atom(env,"undefined");
     atom_rowid = enif_make_atom(env,"rowid");
     atom_changes = enif_make_atom(env,"changes");
-
-    ErlNifResourceType *rt;
+    
     if (!enif_get_int(env,info,&g_nthreads))
     {
         printf("Unable to read int for nthreads\r\n");
@@ -1122,8 +1132,7 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     
     g_threads = (esqlite_thread*)malloc(sizeof(esqlite_thread)*g_nthreads);
     memset(g_threads,0,sizeof(esqlite_thread)*g_nthreads);
-
-    int i = 0;
+    
     for (i = 0; i < g_nthreads; i++)
     {
         g_threads[i].index = i;
