@@ -28,7 +28,13 @@
 #include <fcntl.h>
 
 #include "queue.h"
-#include "sqlite3.h"
+
+// Directly include sqlite3.c
+// This way we are sure the included version of sqlite3 is actually used.
+// If we were to just include "sqlite3.h" OSX would actually use /usr/lib/libsqlite3.dylib
+#define SQLITE_API static 
+#define SQLITE_EXTERN static 
+#include "sqlite3.c" 
 
 #define MAX_ATOM_LENGTH 255 /* from atom.h, not exposed in erlang include */
 #define MAX_PATHNAME 512 /* unfortunately not in sqlite.h. */
