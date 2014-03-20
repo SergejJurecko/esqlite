@@ -37,7 +37,7 @@
 #define SQLITE_EXTERN static 
 #include "sqlite3.c" 
 #else
-#include "sqlite.h"
+#include "sqlite3.h"
 #endif
 
 #define MAX_ATOM_LENGTH 255 /* from atom.h, not exposed in erlang include */
