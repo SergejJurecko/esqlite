@@ -65,6 +65,8 @@ typedef struct {
     unsigned int thread;
     sqlite3 *db;
     char open;
+    int wal_prev_pages;
+    int wal_pages;
 } esqlite_connection;
 
 /* prepared statement */
@@ -140,6 +142,15 @@ static ERL_NIF_TERM
 make_row_tuple(ErlNifEnv *env, ERL_NIF_TERM value) 
 {
     return enif_make_tuple2(env, make_atom(env, "row"), value);
+}
+
+
+int wal_hook(void *data,sqlite3* db,const char* nm,int npages)
+{
+    esqlite_connection *conn = (esqlite_connection *) data;
+    conn->wal_prev_pages = conn->wal_pages;
+    conn->wal_pages = npages;
+    return SQLITE_OK;
 }
 
 static const char *
@@ -288,6 +299,8 @@ do_open(esqlite_command *cmd, esqlite_thread *thread)
 
 	    return error;
     }
+    cmd->conn->wal_prev_pages = cmd->conn->wal_pages = 0;
+    sqlite3_wal_hook(cmd->conn->db,wal_hook,cmd->conn);
     cmd->conn->open = 1;
 
     if (cmd->arg1 == 0)
@@ -840,6 +853,21 @@ esqlite_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     return enif_make_tuple2(env,push_command(conn->thread, cmd),db_conn);
 }
 
+static ERL_NIF_TERM 
+esqlite_wal_pages(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    esqlite_connection *db;
+
+    if (argc != 1)
+        return enif_make_badarg(env);
+
+    if(!enif_get_resource(env, argv[0], esqlite_connection_type, (void **) &db))
+    {
+        return enif_make_badarg(env);
+    }
+    return enif_make_tuple2(env, enif_make_int(env,db->wal_prev_pages),enif_make_int(env,db->wal_pages));
+}
+
 /*
  * Execute the sql statement
  */
@@ -1185,7 +1213,8 @@ static ErlNifFunc nif_funcs[] = {
     {"bind", 4, esqlite_bind},
     {"parse_helper",2,parse_helper},
     {"column_names", 3, esqlite_column_names},
-    {"close", 3, esqlite_close}
+    {"close", 3, esqlite_close},
+    {"wal_pages",1,esqlite_wal_pages}
 };
 
 ERL_NIF_INIT(esqlite3_nif, nif_funcs, on_load, NULL, NULL, on_unload);

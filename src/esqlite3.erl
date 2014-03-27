@@ -32,7 +32,7 @@
          fetchall/1,
          column_names/1,
          close/1,
-         parse_helper/1,parse_helper/2]).
+         parse_helper/1,parse_helper/2,wal_pages/1]).
 
 -export([q/2, q/3, map/3, foreach/3]).
 
@@ -84,6 +84,11 @@ open(Filename,ThreadNumber,Sql) ->
     Threads :: integer().
 init(Threads) ->
     esqlite3_nif:init(Threads).
+
+%% @doc Read number of pages in wal
+-spec wal_pages(connection()) -> tuple().
+wal_pages({connection, _Ref, Connection}) ->
+    esqlite3_nif:wal_pages(Connection).
 
 %% @doc Execute a sql statement, returns a list with tuples.
 -spec q(sql(), connection()) -> list(tuple()).

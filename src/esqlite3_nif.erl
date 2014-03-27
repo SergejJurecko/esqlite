@@ -33,7 +33,8 @@
          column_names/3,
          close/3,
          noop/3,
-         parse_helper/2
+         parse_helper/2,
+         wal_pages/1
 ]).
 
 noop(_,_,_) ->
@@ -56,6 +57,9 @@ init(Threads) when is_integer(Threads) ->
         {error,{reload,_}} ->
             ok
     end.
+
+wal_pages(_) ->
+    exit(nif_library_not_loaded).
 
 %% @doc Start a low level thread which will can handle sqlite3 calls. 
 %%
