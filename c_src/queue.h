@@ -13,12 +13,12 @@ typedef struct queue_t queue;
 queue * queue_create();
 void queue_destroy(queue *queue);
 
-int queue_has_item(queue *queue);
+// int queue_has_item(queue *queue);
 
 int queue_push(queue *queue, void* item);
 void* queue_pop(queue *queue);
 
-int queue_send(queue *queue, void* item);
-void* queue_receive(queue *);
+// int queue_send(queue *queue, void* item);
+// void* queue_receive(queue *);
 
 #endif 
