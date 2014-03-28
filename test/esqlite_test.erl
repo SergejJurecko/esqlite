@@ -166,6 +166,20 @@ foreach_test() ->
     
     ok.
 
+backup_test() ->
+    esqlite3:init(2),
+    {ok, DbSrc} = esqlite3:open(":memory:"),
+    {ok, DbDst} = esqlite3:open(":memory:"),
+    {ok,_} = esqlite3:exec_script(["create table tab (id integer, val text);",
+                                         "insert into tab values (1,'aaa');"
+                                         "insert into tab values (2,'bbb');"],DbSrc),
+    {ok,[[_,{rows,[_,_]}]]} = esqlite3:exec_script("select * from tab",DbSrc),
+    {ok,Backup} = esqlite3:backup_init(DbDst,DbSrc),
+    done = esqlite3:backup_step(Backup,100),
+    ok = esqlite3:backup_finish(Backup),
+    {ok,[[_,{rows,[_,_]}]]} = esqlite3:exec_script("select * from tab",DbDst),
+    ok.
+
 map_test() ->
     esqlite3:init(2),
     {ok, Db} = esqlite3:open(":memory:"),
@@ -192,8 +206,18 @@ map_test() ->
      [{one,<<"hello3">>},{two,12}],
      [{one,<<"hello4">>},{two,13}]]  = esqlite3:map(Assoc, "select * from test_table", Db),
     
-    ?debugFmt("~p",[esqlite3:exec_script(";;;;;select * from test_table;;;;;",Db)]),
-    ?debugFmt("exec2 ~p~n", [esqlite3:exec_script("savepoint 'adb';SELECT * FROM test_table;insert into test_table values ('exec2',100);release savepoint 'adb';",Db)]),
+    ?assertMatch({ok,[[{columns,{<<"one">>,<<"two">>}},
+      {rows,[{<<"hello4">>,13},
+             {<<"hello3">>,12},
+             {<<"hello2">>,11},
+             {<<"hello1">>,10}]}]]},esqlite3:exec_script(";;;;;select * from test_table;;;;;",Db)),
+    ?assertMatch({ok,[{changes,5,1},
+           [{columns,{<<"one">>,<<"two">>}},
+            {rows,[{<<"hello4">>,13},
+                   {<<"hello3">>,12},
+                   {<<"hello2">>,11},
+                   {<<"hello1">>,10}]}]]},
+            esqlite3:exec_script("$savepoint 'adb';SELECT * FROM test_table;insert into test_table values ('exec2',100);$release savepoint 'adb';",Db)),
 
     ok.
 

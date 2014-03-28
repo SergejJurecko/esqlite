@@ -34,13 +34,29 @@
          close/3,
          noop/3,
          parse_helper/2,
-         wal_pages/1
+         wal_pages/1,
+         backup_init/4,
+         backup_finish/3,
+         backup_step/4,
+         backup_pages/1
 ]).
 
 noop(_,_,_) ->
     exit(nif_library_not_loaded).
 
 parse_helper(_,_) ->
+    exit(nif_library_not_loaded).
+
+backup_init(_,_,_,_) ->
+    exit(nif_library_not_loaded).
+
+backup_finish(_,_,_) ->
+    exit(nif_library_not_loaded).
+
+backup_step(_,_,_,_) ->
+    exit(nif_library_not_loaded).
+
+backup_pages(_) ->
     exit(nif_library_not_loaded).
 
 init(Threads) when is_integer(Threads) ->

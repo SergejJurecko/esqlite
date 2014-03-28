@@ -32,7 +32,8 @@
          fetchall/1,
          column_names/1,
          close/1,
-         parse_helper/1,parse_helper/2,wal_pages/1]).
+         parse_helper/1,parse_helper/2,wal_pages/1,
+         backup_init/2,backup_step/2,backup_finish/1,backup_pages/1]).
 
 -export([q/2, q/3, map/3, foreach/3]).
 
@@ -232,6 +233,30 @@ exec_script(Sql,  {connection, _Ref, Connection}) ->
     Ref = make_ref(),
     ok = esqlite3_nif:exec_script(Connection, Ref, self(), Sql),
     receive_answer(Ref).
+
+backup_init({connection, _, Dest},{connection, _, Src}) ->
+    Ref = make_ref(),
+    ok = esqlite3_nif:backup_init(Dest,Src,Ref,self()),
+    case receive_answer(Ref) of
+        {ok,B} ->
+            {ok,{backup,make_ref(),B}};
+        error ->
+            error
+    end.
+
+backup_step({backup, _Ref, B},N) ->
+    Ref = make_ref(),
+    ok = esqlite3_nif:backup_step(B,Ref,self(),N),
+    receive_answer(Ref).
+
+backup_finish({backup, _Ref, B}) ->
+    Ref = make_ref(),
+    ok = esqlite3_nif:backup_finish(B,Ref,self()),
+    receive_answer(Ref).
+
+backup_pages({backup, _Ref, B}) ->
+    esqlite3_nif:backup_pages(B).
+
 
 %% @doc Prepare a statement
 %%

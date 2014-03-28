@@ -5,6 +5,7 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "queue.h"
 
@@ -85,17 +86,6 @@ queue_destroy(queue *queue)
     enif_free(queue);
 }
 
-int
-queue_has_item(queue *queue)
-{
-    int ret;
-
-    enif_mutex_lock(queue->lock);
-    ret = (queue->head != NULL);
-    enif_mutex_unlock(queue->lock);
-    
-    return ret;
-}
 
 int
 queue_push(queue *queue, void *item)
@@ -164,33 +154,34 @@ queue_pop(queue *queue)
     return item;
 }
 
-int
-queue_send(queue *queue, void *item)
-{
-    enif_mutex_lock(queue->lock);
-    assert(queue->message == NULL && "Attempting to send multiple messages.");
-    queue->message = item;
-    enif_cond_signal(queue->cond);
-    enif_mutex_unlock(queue->lock);
-    return 1;
-}
 
-void *
-queue_receive(queue *queue)
-{
-    void *item;
+// int
+// queue_send(queue *queue, void *item)
+// {
+//     enif_mutex_lock(queue->lock);
+//     assert(queue->message == NULL && "Attempting to send multiple messages.");
+//     queue->message = item;
+//     enif_cond_signal(queue->cond);
+//     enif_mutex_unlock(queue->lock);
+//     return 1;
+// }
 
-    enif_mutex_lock(queue->lock);
-    
-    /* Wait for an item to become available.
-     */
-    while(queue->message == NULL)
-        enif_cond_wait(queue->cond, queue->lock);
+// void *
+// queue_receive(queue *queue)
+// {
+//     void *item;
 
-    item = queue->message;
-    queue->message = NULL;
+//     enif_mutex_lock(queue->lock);
     
-    enif_mutex_unlock(queue->lock);
+//     /* Wait for an item to become available.
+//      */
+//     while(queue->message == NULL)
+//         enif_cond_wait(queue->cond, queue->lock);
+
+//     item = queue->message;
+//     queue->message = NULL;
     
-    return item;
-}
+//     enif_mutex_unlock(queue->lock);
+    
+//     return item;
+// }
