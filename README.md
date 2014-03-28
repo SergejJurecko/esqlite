@@ -26,3 +26,4 @@ Fork changes
 Init call sets number of threads, every open call can set which thread 
 that particular sqlite connection should execute on.
 - Added exec_script which will execute multiple statements at once and return proper values (not just ok).
+- Supports the backup api 
