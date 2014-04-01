@@ -6,8 +6,8 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-
 #include "queue.h"
+
 
 struct qitem_t
 {
@@ -25,22 +25,53 @@ struct queue_t
     qitem *tail;
     void *message;
     int length;
+
+    qitem *reuseq;
+    // int reuseqlen;
+    void (*freeitem)(void*);
 };
 
+void*
+queue_get_item_data(void* item)
+{
+    qitem* it = (qitem*)item;
+    return it->data;
+}
+
+void
+queue_set_item_data(void* item, void *data)
+{
+    qitem* it = (qitem*)item;
+    it->data = data;
+}
+
 queue *
-queue_create()
+queue_create(void (*freecb)(void*))
 {
     queue *ret;
+    int i = 0;
+    qitem *item;
 
     ret = (queue *) enif_alloc(sizeof(struct queue_t));
     if(ret == NULL) goto error;
 
+    ret->freeitem = freecb;
     ret->lock = NULL;
     ret->cond = NULL;
     ret->head = NULL;
     ret->tail = NULL;
     ret->message = NULL;
     ret->length = 0;
+
+    ret->reuseq = (qitem *) enif_alloc(sizeof(struct qitem_t));
+    ret->reuseq->data = ret->reuseq->next = NULL;
+    item = ret->reuseq;
+    // for (i = 1; i < 10; i++)
+    // {
+    //     item->next = (qitem *) enif_alloc(sizeof(struct qitem_t));
+    //     item->next->next = item->next->data = item->data = NULL;
+    //     item = item->next;
+    // }
 
 
     ret->lock = enif_mutex_create("queue_lock");
@@ -78,6 +109,15 @@ queue_destroy(queue *queue)
     queue->head = NULL;
     queue->tail = NULL;
     queue->length = -1;
+    while(queue->reuseq != NULL)
+    {
+        printf("destroy queue\r\n");
+        fflush(stdout);
+        qitem *tmp = queue->reuseq->next;
+        queue->freeitem(queue->reuseq->data);
+        enif_free(queue->reuseq);
+        queue->reuseq = tmp;
+    }
     enif_mutex_unlock(lock);
 
     assert(length == 0 && "Attempting to destroy a non-empty queue.");
@@ -90,12 +130,7 @@ queue_destroy(queue *queue)
 int
 queue_push(queue *queue, void *item)
 {
-    qitem * entry = (qitem *) enif_alloc(sizeof(struct qitem_t));
-    if(entry == NULL) 
-        return 0;
-
-    entry->data = item;
-    entry->next = NULL;
+    qitem *entry = (qitem*)item;
 
     enif_mutex_lock(queue->lock);
 
@@ -121,7 +156,6 @@ void*
 queue_pop(queue *queue)
 {
     qitem *entry;
-    void* item;
 
     enif_mutex_lock(queue->lock);
     
@@ -148,12 +182,38 @@ queue_pop(queue *queue)
 
     enif_mutex_unlock(queue->lock);
 
-    item = entry->data;
-    enif_free(entry);
-
-    return item;
+    return entry;
 }
 
+void
+queue_recycle(queue *queue,void* item)
+{
+    qitem *entry = (qitem*)item;
+    enif_mutex_lock(queue->lock);
+    entry->next = queue->reuseq;
+    queue->reuseq = entry;
+    enif_mutex_unlock(queue->lock);
+}
+
+void* 
+queue_get_item(queue *queue)
+{
+    qitem *entry;
+    enif_mutex_lock(queue->lock);
+    if (queue->reuseq != NULL)
+    {
+        entry = queue->reuseq;
+        queue->reuseq = queue->reuseq->next;
+    }
+    else
+    {
+        entry = (qitem *) enif_alloc(sizeof(struct qitem_t));
+        entry->data = NULL;
+    }
+    entry->next = NULL;
+    enif_mutex_unlock(queue->lock);
+    return entry;
+}
 
 // int
 // queue_send(queue *queue, void *item)
