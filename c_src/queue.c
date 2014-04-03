@@ -49,7 +49,7 @@ queue *
 queue_create(void (*freecb)(void*))
 {
     queue *ret;
-    int i = 0;
+    // int i = 0;
     qitem *item;
 
     ret = (queue *) enif_alloc(sizeof(struct queue_t));

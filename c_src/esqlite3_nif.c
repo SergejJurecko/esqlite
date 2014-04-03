@@ -58,6 +58,8 @@ typedef struct {
 int g_nthreads;
 esqlite_thread* g_threads;
 
+esqlite_thread g_interrupt_thread;
+
 ErlNifUInt64 g_dbcount = 0;
 ErlNifMutex *g_dbcount_mutex = NULL;
 
@@ -99,7 +101,8 @@ typedef enum {
     cmd_stop,
     cmd_backup_init,
     cmd_backup_step,
-    cmd_backup_finish
+    cmd_backup_finish,
+    cmd_interrupt
 } command_type;
 
 typedef struct {
@@ -125,7 +128,7 @@ ERL_NIF_TERM atom_rowid;
 ERL_NIF_TERM atom_changes;
 ERL_NIF_TERM atom_done;
 static ERL_NIF_TERM make_cell(ErlNifEnv *env, sqlite3_stmt *statement, unsigned int i);
-static ERL_NIF_TERM push_command(unsigned int thread, void *cmd);
+static ERL_NIF_TERM push_command(int thread, void *cmd);
 static ERL_NIF_TERM make_binary(ErlNifEnv *env, const void *bytes, unsigned int size);
 
 static ERL_NIF_TERM 
@@ -259,9 +262,15 @@ command_destroy(void *obj)
 // }
 
 void *
-command_create(int thread)
+command_create(int threadnum)
 {
-    void *item = queue_get_item(g_threads[thread].commands);
+    esqlite_thread *thread = NULL;
+    if (threadnum == -1)
+        thread = &g_interrupt_thread;
+    else
+        thread = &(g_threads[threadnum]);
+
+    void *item = queue_get_item(thread->commands);
     esqlite_command *cmd = queue_get_item_data(item);
     if (cmd == NULL)
     {
@@ -419,6 +428,14 @@ do_backup_finish(esqlite_command *cmd, esqlite_thread *thread)
     return atom_ok;
 }
 
+static ERL_NIF_TERM
+do_interrupt(esqlite_command *cmd, esqlite_thread *thread) 
+{
+    sqlite3_interrupt(cmd->conn->db);
+    enif_release_resource(cmd->conn);
+    return atom_error;
+}
+
 /* 
  */
 static ERL_NIF_TERM
@@ -504,7 +521,8 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
             free(array);
             rowcount++;
         }
-        if (rc == SQLITE_ERROR)
+
+        if (rc == SQLITE_ERROR || rc == SQLITE_INTERRUPT)
             break;
         
         if (skip == 0 && (rowcount > 0 || column_count > 0))
@@ -542,6 +560,10 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
     enif_release_resource(cmd->conn);
     if (rc == SQLITE_ERROR)
         return make_sqlite3_error_tuple(cmd->env, "exec_script", rc, cmd->conn->db);
+    else if (rc == SQLITE_INTERRUPT)
+    {
+        return make_error_tuple(cmd->env, "query_aborted");
+    }
     else
     {
         return make_ok_tuple(cmd->env,results);
@@ -829,6 +851,8 @@ evaluate_command(esqlite_command *cmd,esqlite_thread *thread)
         return do_backup_finish(cmd,thread);
     case cmd_backup_step:
         return do_backup_step(cmd,thread);
+    case cmd_interrupt:
+        return do_interrupt(cmd,thread);
     case cmd_unknown:
         return atom_ok;
     default:
@@ -838,9 +862,15 @@ evaluate_command(esqlite_command *cmd,esqlite_thread *thread)
 
 // esqlite_connection *conn
 static ERL_NIF_TERM
-push_command(unsigned int thread, void *item) 
+push_command(int threadnum, void *item) 
 {
-    if(!queue_push(g_threads[thread].commands, item)) 
+    esqlite_thread *thread = NULL;
+    if (threadnum == -1)
+        thread = &g_interrupt_thread;
+    else
+        thread = &(g_threads[threadnum]);
+
+    if(!queue_push(thread->commands, item)) 
     {
         esqlite_command *cmd = queue_get_item_data(item);
         return make_error_tuple(cmd->env, "command_push_failed");
@@ -860,7 +890,6 @@ esqlite_thread_func(void *arg)
 {
     esqlite_thread* data = (esqlite_thread*)arg;
     esqlite_command *cmd;
-    data->commands = queue_create(command_destroy);
     data->alive = 1;
 
     while(1) 
@@ -977,6 +1006,30 @@ esqlite_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     return enif_make_tuple2(env,push_command(conn->thread, item),db_conn);
 }
 
+static ERL_NIF_TERM
+esqlite_interrupt_query(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    esqlite_command *cmd = NULL;
+    esqlite_connection* conn;
+
+    if(argc != 1) 
+        return enif_make_badarg(env);  
+
+    if(!enif_get_resource(env, argv[0], esqlite_connection_type, (void **) &conn))
+    {
+        return enif_make_badarg(env);
+    }   
+    void *item = command_create(-1);
+    cmd = queue_get_item_data(item);
+    if(!cmd) 
+        return make_error_tuple(env, "command_create_failed");
+    cmd->type = cmd_interrupt;
+    cmd->ref = 0;
+    cmd->conn = conn;
+    enif_keep_resource(conn);
+
+    return push_command(-1, item);
+}
 static ERL_NIF_TERM
 esqlite_backup_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
@@ -1443,10 +1496,20 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     
     g_threads = (esqlite_thread*)malloc(sizeof(esqlite_thread)*g_nthreads);
     memset(g_threads,0,sizeof(esqlite_thread)*g_nthreads);
+    memset(&g_interrupt_thread,0,sizeof(esqlite_thread));
+    g_interrupt_thread.index = i;
+    g_interrupt_thread.commands = queue_create(command_destroy);
+
+    if(enif_thread_create("esqlite_connection", &(g_interrupt_thread.tid), esqlite_thread_func, &(g_interrupt_thread), NULL) != 0) 
+    {
+        printf("Unable to create esqlite3 thread\r\n");
+        return -1;
+    }
     
     for (i = 0; i < g_nthreads; i++)
     {
         g_threads[i].index = i;
+        g_threads[i].commands = queue_create(command_destroy);
 
         /* Start command processing thread */
         if(enif_thread_create("esqlite_connection", &(g_threads[i].tid), esqlite_thread_func, &(g_threads[i]), NULL) != 0) 
@@ -1463,7 +1526,7 @@ static void
 on_unload(ErlNifEnv* env, void* priv_data)
 {
     int i;
-    for (i = 0; i < g_nthreads; i++)
+    for (i = -1; i < g_nthreads; i++)
     {
         void *item = command_create(i);
         esqlite_command *cmd = queue_get_item_data(item);
@@ -1492,6 +1555,7 @@ static ErlNifFunc nif_funcs[] = {
     {"backup_finish",3,esqlite_backup_finish},
     {"backup_step",4,esqlite_backup_step},
     {"backup_pages",1,esqlite_backup_pages},
+    {"interrupt_query",1,esqlite_interrupt_query}
 };
 
 ERL_NIF_INIT(esqlite3_nif, nif_funcs, on_load, NULL, NULL, on_unload);

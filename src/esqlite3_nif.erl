@@ -38,10 +38,14 @@
          backup_init/4,
          backup_finish/3,
          backup_step/4,
-         backup_pages/1
+         backup_pages/1,
+         interrupt_query/1
 ]).
 
 noop(_,_,_) ->
+    exit(nif_library_not_loaded).
+
+interrupt_query(_) ->
     exit(nif_library_not_loaded).
 
 parse_helper(_,_) ->

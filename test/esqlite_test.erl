@@ -6,6 +6,12 @@
 
 -include_lib("eunit/include/eunit.hrl").
 
+% interrupt_test() ->
+%     esqlite3:init(2),
+%     {ok, Db} = esqlite3:open("../user"),
+%     {error,query_aborted} = esqlite3:exec_script("delete from t_dir "++"where eid > 2800 and eid < 3900;",Db,1000),
+%     ok.
+
 open_single_database_test() ->
     esqlite3:init(2),
     {ok, _C1} = esqlite3:open("test.db"),

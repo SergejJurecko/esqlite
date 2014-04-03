@@ -24,7 +24,7 @@
 -export([init/1,noop/1,
          open/1,open/2,open/3,
          exec/2,
-         exec_script/2,
+         exec_script/2,exec_script/3,
          prepare/2, 
          step/1, 
          bind/2, 
@@ -229,10 +229,12 @@ noop({connection, _Ref, Connection}) ->
 %% @doc Execute Sql statement, returns: {changes,LastRowid,NumChanges} | {Columns,Rows} | ok | {error, reason()}
 %% Rows will be in reverse order.
 %% @spec exec(iolist(), connection()) -> integer() |  {error, error_message()}
-exec_script(Sql,  {connection, _Ref, Connection}) ->
+exec_script(Sql, Db) ->
+    exec_script(Sql,Db,infinity).
+exec_script(Sql,  {connection, _Ref, Connection},Timeout) ->
     Ref = make_ref(),
     ok = esqlite3_nif:exec_script(Connection, Ref, self(), Sql),
-    receive_answer(Ref).
+    receive_answer(Ref,Connection,Timeout).
 
 backup_init({connection, _, Dest},{connection, _, Src}) ->
     Ref = make_ref(),
@@ -307,3 +309,18 @@ receive_answer(Ref) ->
     receive 
         {Ref, Resp} -> Resp
     end.
+receive_answer(Ref,Connection,Timeout) ->
+    receive
+        {Ref,Resp} ->
+            Resp
+    after Timeout ->
+        % ARef = make_ref(),
+        ok = esqlite3_nif:interrupt_query(Connection),
+        receive
+            {Ref,Resp} ->
+                Resp
+            % {ARef,_} ->
+            %     {error,query_aborted}
+        end
+   end.
+
