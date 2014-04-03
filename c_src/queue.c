@@ -111,8 +111,6 @@ queue_destroy(queue *queue)
     queue->length = -1;
     while(queue->reuseq != NULL)
     {
-        printf("destroy queue\r\n");
-        fflush(stdout);
         qitem *tmp = queue->reuseq->next;
         queue->freeitem(queue->reuseq->data);
         enif_free(queue->reuseq);

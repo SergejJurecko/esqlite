@@ -314,13 +314,10 @@ receive_answer(Ref,Connection,Timeout) ->
         {Ref,Resp} ->
             Resp
     after Timeout ->
-        % ARef = make_ref(),
         ok = esqlite3_nif:interrupt_query(Connection),
         receive
             {Ref,Resp} ->
                 Resp
-            % {ARef,_} ->
-            %     {error,query_aborted}
         end
    end.
 

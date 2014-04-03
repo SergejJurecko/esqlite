@@ -1533,7 +1533,10 @@ on_unload(ErlNifEnv* env, void* priv_data)
         cmd->type = cmd_stop;
         push_command(i, item);
 
-        enif_thread_join((ErlNifTid)g_threads[i].tid,NULL);
+        if (i >= 0)
+            enif_thread_join((ErlNifTid)g_threads[i].tid,NULL);
+        else
+            enif_thread_join((ErlNifTid)g_interrupt_thread.tid,NULL);
     }
 }
 
