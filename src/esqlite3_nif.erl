@@ -39,16 +39,36 @@
          backup_finish/3,
          backup_step/4,
          backup_pages/1,
-         interrupt_query/1
+         interrupt_query/1,
+         lz4_compress/1,
+         lz4_decompress/2,
+         lz4_decompress/3,
+         tcp_connect/6,
+         replicate_opts/3
 ]).
 
 noop(_,_,_) ->
+    exit(nif_library_not_loaded).
+
+replicate_opts(_,_,_) ->
+    exit(nif_library_not_loaded).
+
+tcp_connect(_,_,_,_,_,_) ->
     exit(nif_library_not_loaded).
 
 interrupt_query(_) ->
     exit(nif_library_not_loaded).
 
 parse_helper(_,_) ->
+    exit(nif_library_not_loaded).
+
+lz4_compress(_) ->
+    exit(nif_library_not_loaded).
+
+lz4_decompress(_,_) ->
+    exit(nif_library_not_loaded).
+
+lz4_decompress(_,_,_) ->
     exit(nif_library_not_loaded).
 
 backup_init(_,_,_,_) ->

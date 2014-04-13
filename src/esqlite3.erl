@@ -33,7 +33,9 @@
          column_names/1,
          close/1,
          parse_helper/1,parse_helper/2,wal_pages/1,
-         backup_init/2,backup_step/2,backup_finish/1,backup_pages/1]).
+         backup_init/2,backup_step/2,backup_finish/1,backup_pages/1,
+         lz4_compress/1,lz4_decompress/2,lz4_decompress/3,
+         replicate_opts/3,tcp_connect/4]).
 
 -export([q/2, q/3, map/3, foreach/3]).
 
@@ -46,6 +48,21 @@ parse_helper(Bin) ->
     parse_helper(Bin,0).
 parse_helper(Bin,Offset) ->
     esqlite3_nif:parse_helper(Bin,Offset).
+
+replicate_opts({connection, _Ref, Connection},SocketFlag,PacketPrefix) ->
+    esqlite3_nif:replicate_opts(Connection,SocketFlag,PacketPrefix).
+
+tcp_connect(Ip,Port,ConnectStr,ConnNumber) ->
+    Ref = make_ref(),
+    esqlite3_nif:tcp_connect(Ref,self(),Ip,Port,ConnectStr,ConnNumber),
+    receive_answer(Ref).
+
+lz4_compress(B) ->
+    esqlite3_nif:lz4_compress(B).
+lz4_decompress(B,SizeOrig) ->
+    esqlite3_nif:lz4_decompress(B,SizeOrig).
+lz4_decompress(B,SizeOrig,SizeIn) ->
+    esqlite3_nif:lz4_decompress(B,SizeOrig,SizeIn).
 
 %% @doc Opens a sqlite3 database mentioned in Filename on first thread.
 %%

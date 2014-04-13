@@ -12,12 +12,110 @@
 %     {error,query_aborted} = esqlite3:exec_script("delete from t_dir "++"where eid > 2800 and eid < 3900;",Db,1000),
 %     ok.
 
+wal_test() ->
+    % spawn(fun() -> receive_wal() end),
+    % timer:sleep(100),
+    {ok,LS} = gen_tcp:listen(23244,[binary,{ip,{127,0,0,1}},{keepalive,true},{reuseaddr,true},{packet,4}]),
+    
+    esqlite3:init(2),
+    InitBin = "HELLO REPLICATOR!",
+    % Both threads will be waiting to accept connection
+    ok = esqlite3:tcp_connect("127.0.0.1",23244,InitBin,0),
+    ok = esqlite3:tcp_connect("127.0.0.1",23244,InitBin,1),
+    
+    {ok,S1} = gen_tcp:accept(LS),
+    {ok,S2} = gen_tcp:accept(LS),
+    inet:setopts(S1,[{active,true},{packet,4}]), 
+    inet:setopts(S2,[{active,true},{packet,4}]), 
+
+    % Get hello
+    ok = rec_wal_sock(S1),
+    ok = rec_wal_sock(S2),
+
+    Nm = "waltest",
+    % case filelib:file_size(Nm) > 0 of
+    %     true ->
+    %         {ok, Db1,_} = esqlite3:open("waltest",0,["PRAGMA journal_mode=wal;PRAGMA journal_size_limit=0;PRAGMA synchronous=0;"]),
+    %         esqlite3:close(Db1);
+    %     _ ->
+    %         ok
+    % end,
+    file:delete(Nm),
+    {ok, Db,Res} = esqlite3:open("waltest",0,["PRAGMA journal_mode=wal;PRAGMA journal_size_limit=0;",
+                                                "PRAGMA synchronous=0;PRAGMA page_size;"]),
+    ok = esqlite3:replicate_opts(Db,2#00000011,"PREFIX"),
+
+    ok = rec_wal_sock(S1),
+    ok = rec_wal_sock(S2),
+
+    {ok,_} = esqlite3:exec_script("CREATE TABLE tab (id INTEGER PRIMARY KEY, val TEXT);",Db),
+    ok = rec_wal_sock(S1),
+    ok = rec_wal_sock(S2),
+    {ok,_} = esqlite3:exec_script("INSERT INTO tab VALUES (1,'aaa');",Db),
+    ok = rec_wal_sock(S1),
+    ok = rec_wal_sock(S2),
+    {ok,_} = esqlite3:exec_script("INSERT INTO tab VALUES (2,'aaa');",Db),
+    ok = rec_wal_sock(S1),
+    ok = rec_wal_sock(S2),
+    {ok,_} = esqlite3:exec_script("INSERT INTO tab VALUES (3,'aaa');",Db),
+    ok = rec_wal_sock(S1),
+    ok = rec_wal_sock(S2),
+    {ok,_} = esqlite3:exec_script("INSERT INTO tab VALUES (4,'aaa');",Db),
+    ok = rec_wal_sock(S1),
+    ok = rec_wal_sock(S2),
+    ?debugFmt("~p",[esqlite3:exec_script("select * from tab;",Db)]),
+    ok = rec_wal_sock(S1),
+    ok = rec_wal_sock(S2),
+    % ?debugFmt("size wal~p",[filelib:file_size("waltest-wal")]),
+    % ?debugFmt("~p",[file:list_dir(".")]),
+    % timer:sleep(1000),
+    esqlite3:close(Db),
+    {ok, Db1,_} = esqlite3:open("waltest",0,["PRAGMA journal_mode=wal;PRAGMA journal_size_limit=0;",
+                                                "PRAGMA synchronous=0;PRAGMA page_size;"]),
+    ?debugFmt("After reopen ~p",[esqlite3:exec_script("select * from tab;",Db1)]),
+    esqlite3:close(Db1).
+
+rec_wal_sock(S) ->
+    receive
+        {tcp,S,<<"HELLO REPLICATOR!">>} ->
+            ?debugFmt("Received hello",[]),
+            rec_wal_sock(S);
+        {tcp,S,Data} ->
+            ok = parse_page(Data),
+            rec_wal_sock(S);
+        {tcp_closed,S} ->
+            closed
+    after 0 ->
+        ok
+    end.
+parse_page(<<LenPrefix:16,Prefix:LenPrefix/binary,LenHeader,Header:LenHeader/binary,
+                    LenPage:16,Page:LenPage/binary,Rem/binary>>) ->
+    case LenPage of
+        0 ->
+            <<NPages:32>> = Header,
+            ?debugFmt("WAL end - prefix ~p lenheader ~p npages ~p",[Prefix,LenHeader,NPages]);
+        _ ->
+            ?debugFmt("WAL page - prefix ~p lenheader ~p lenpage ~p",[Prefix,LenHeader,LenPage])
+    end,
+    parse_page(Rem);
+parse_page(<<>>) ->
+    ok.
+
+lz4_test() ->
+    esqlite3:init(2),
+    Bin1 = binary:copy(<<"SELECT * FROM WTF;">>,2),
+    {Compressed1,CompressedSize1} = esqlite3:lz4_compress(Bin1),
+    % ?debugFmt("Compressed ~p size ~p ",[byte_size(Compressed),CompressedSize]),
+    Bin1 = esqlite3:lz4_decompress(Compressed1,byte_size(Bin1),CompressedSize1),
+    ok.
+
 open_single_database_test() ->
     esqlite3:init(2),
     {ok, _C1} = esqlite3:open("test.db"),
     ok.
 
 open_with_sql_test() ->
+    file:delete("test.db"),
     esqlite3:init(2),
     {ok, _C1,[[{columns,_},{rows,[]}]]} = esqlite3:open("test.db",1,<<"select name, sql from sqlite_master where type='table';">>),
     ok.
