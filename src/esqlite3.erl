@@ -35,7 +35,7 @@
          parse_helper/1,parse_helper/2,wal_pages/1,
          backup_init/2,backup_step/2,backup_finish/1,backup_pages/1,
          lz4_compress/1,lz4_decompress/2,lz4_decompress/3,
-         replicate_opts/3,tcp_connect/4]).
+         replicate_opts/3,tcp_connect/4,make_wal_header/2]).
 
 -export([q/2, q/3, map/3, foreach/3]).
 
@@ -43,6 +43,9 @@
 -type connection() :: tuple().
 -type statement() :: term().
 -type sql() :: iolist().
+
+make_wal_header(PageSize,SaltBin) ->
+    esqlite3_nif:wal_header(PageSize,SaltBin).
 
 parse_helper(Bin) ->
     parse_helper(Bin,0).

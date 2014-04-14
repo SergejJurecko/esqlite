@@ -53,6 +53,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <sys/uio.h>
+#include <netinet/tcp.h>
 
 #define MAX_ATOM_LENGTH 255 /* from atom.h, not exposed in erlang include */
 #define MAX_PATHNAME 512 /* unfortunately not in sqlite.h. */
@@ -607,8 +608,10 @@ do_tcp_connect(esqlite_command *cmd, esqlite_thread *thread)
             return make_error_tuple(cmd->env,"unable to initialize");
         }            
 
-        setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, NULL, 0);
-        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, NULL, 0);
+        int flag = 1;
+        setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (char*)&flag, sizeof(int));
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char*)&flag, sizeof(int));
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char *) &flag, sizeof(int));
 
         void *item = command_create(i);
         ncmd = queue_get_item_data(item);
@@ -1283,6 +1286,42 @@ tcp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 }
 
 static ERL_NIF_TERM
+wal_header(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    int szPage;
+    u32 aSalt[2];
+    // u8 aWalHdr[WAL_HDRSIZE];      /* Buffer to assemble wal-header in */
+    u32 aCksum[2];                /* Checksum for wal-header */
+    ErlNifBinary binOut;
+    ErlNifBinary binSalt;
+
+    if (argc != 2)
+        enif_make_badarg(env);
+
+    if (!enif_get_int(env,argv[0],&szPage))
+        return enif_make_badarg(env);
+
+    if (!enif_inspect_binary(env,argv[1],&binSalt))
+        return enif_make_badarg(env);
+    if (binSalt.size != 8)
+        return enif_make_badarg(env);
+        
+
+    enif_alloc_binary(WAL_HDRSIZE,&binOut);
+
+    sqlite3Put4byte(&binOut.data[0], (WAL_MAGIC | SQLITE_BIGENDIAN));
+    sqlite3Put4byte(&binOut.data[4], WAL_MAX_VERSION);
+    sqlite3Put4byte(&binOut.data[8], szPage);
+    sqlite3Put4byte(&binOut.data[12], 0);
+    memcpy(&binOut.data[16], binSalt.data, 8);
+    walChecksumBytes(1, binOut.data, WAL_HDRSIZE-2*4, 0, aCksum);
+    sqlite3Put4byte(&binOut.data[24], aCksum[0]);
+    sqlite3Put4byte(&binOut.data[28], aCksum[1]);
+
+    return enif_make_binary(env,&binOut);
+}
+
+static ERL_NIF_TERM
 esqlite_interrupt_query(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     esqlite_command *cmd = NULL;
@@ -1906,7 +1945,8 @@ static ErlNifFunc nif_funcs[] = {
     {"lz4_compress",1,esqlite_lz4_compress},
     {"lz4_decompress",2,esqlite_lz4_decompress},
     {"lz4_decompress",3,esqlite_lz4_decompress},
-    {"tcp_connect",6,tcp_connect}
+    {"tcp_connect",6,tcp_connect},
+    {"wal_header",2,wal_header}
 };
 
 ERL_NIF_INIT(esqlite3_nif, nif_funcs, on_load, NULL, NULL, on_unload);
