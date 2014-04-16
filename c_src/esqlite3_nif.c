@@ -634,6 +634,14 @@ do_tcp_connect(esqlite_command *cmd, esqlite_thread *thread)
             push_command(i, item);
         }
     }
+    else
+    {
+        for (i = 0; i < g_nthreads; i++)
+        {
+            if (sockets[i])
+                close(sockets[i]);
+        }
+    }
     enif_free(sockets);
 
 
