@@ -562,6 +562,8 @@ do_tcp_connect(esqlite_command *cmd, esqlite_thread *thread)
     esqlite_command *ncmd = NULL;
     struct iovec iov[2];
     char packetLen[4];
+    int *sockets;
+    ERL_NIF_TERM result = atom_ok;
 
     if (!enif_get_string(cmd->env, cmd->arg,ip,128,ERL_NIF_LATIN1))
         return enif_make_badarg(cmd->env);
@@ -578,6 +580,9 @@ do_tcp_connect(esqlite_command *cmd, esqlite_thread *thread)
     iov[1].iov_base = bin.data;
     iov[1].iov_len = bin.size;
 
+    sockets = enif_alloc(sizeof(int)*g_nthreads);
+    memset(sockets,0,sizeof(int)*g_nthreads);
+
     for (i = 0; i < g_nthreads; i++)
     {
         fd = socket(AF_INET,SOCK_STREAM,0);
@@ -589,7 +594,8 @@ do_tcp_connect(esqlite_command *cmd, esqlite_thread *thread)
         if (connect(fd, (const void *)&addr, sizeof(addr)) == -1)
         {
             close(fd);
-            return make_error_tuple(cmd->env,"unable to connect");
+            result = make_error_tuple(cmd->env,"unable to connect");
+            break;
         }
         // if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1)
         // {
@@ -605,7 +611,8 @@ do_tcp_connect(esqlite_command *cmd, esqlite_thread *thread)
         if (bin.size+4 != writev(fd,iov,2))
         {
             close(fd);
-            return make_error_tuple(cmd->env,"unable to initialize");
+            result = make_error_tuple(cmd->env,"unable to initialize");
+            break;
         }            
 
         int flag = 1;
@@ -613,15 +620,24 @@ do_tcp_connect(esqlite_command *cmd, esqlite_thread *thread)
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char*)&flag, sizeof(int));
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char *) &flag, sizeof(int));
 
-        void *item = command_create(i);
-        ncmd = queue_get_item_data(item);
-        ncmd->type = cmd_set_socket;
-        ncmd->arg = enif_make_int(ncmd->env,fd);
-        ncmd->arg1 = enif_make_int(ncmd->env,pos);
-        push_command(i, item);
+        sockets[i] = fd;
     }
+    if (result == atom_ok)
+    {
+        for (i = 0; i < g_nthreads; i++)
+        {
+            void *item = command_create(i);
+            ncmd = queue_get_item_data(item);
+            ncmd->type = cmd_set_socket;
+            ncmd->arg = enif_make_int(ncmd->env,sockets[i]);
+            ncmd->arg1 = enif_make_int(ncmd->env,pos);
+            push_command(i, item);
+        }
+    }
+    enif_free(sockets);
 
-    return atom_ok;
+
+    return result;
 }
 
 /* 
@@ -1289,8 +1305,6 @@ static ERL_NIF_TERM
 wal_header(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     int szPage;
-    u32 aSalt[2];
-    // u8 aWalHdr[WAL_HDRSIZE];      /* Buffer to assemble wal-header in */
     u32 aCksum[2];                /* Checksum for wal-header */
     ErlNifBinary binOut;
     ErlNifBinary binSalt;
