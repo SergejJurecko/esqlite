@@ -1576,9 +1576,10 @@ esqlite_wal_pages(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     {
         return enif_make_badarg(env);
     }
-    return enif_make_tuple3(env, enif_make_int(env,db->nPrevPages),
-                                 enif_make_int(env,db->nPages),
-                                 enif_make_int(env,db->socketFlag));
+    return enif_make_tuple2(env, enif_make_int(env,db->nPrevPages),
+                                 enif_make_int(env,db->nPages)
+                                 // enif_make_int(env,db->socketFlag)
+                                 );
 }
 
 /*
