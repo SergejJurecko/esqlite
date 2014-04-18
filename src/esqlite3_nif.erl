@@ -25,7 +25,7 @@
          open/4, 
          open/5,
          exec/4, 
-         exec_script/4, 
+         exec_script/7, 
          prepare/4,
          step/3,
          finalize/3,
@@ -142,8 +142,8 @@ exec(_Db, _Ref, _Dest, _Sql) ->
 %% When the statement is executed Dest will receive message {Ref, answer()}
 %% with answer() {changes,Rowid,NumChanges} | {Columns,Rows} | ok | {error, reason()}
 %%
-%%  @spec exec(connection(), Ref::reference(), Dest::pid(), string()) -> ok | {error, message()}
-exec_script(_Db, _Ref, _Dest, _Sql) ->
+%%  @spec exec(connection(), Ref::reference(), Dest::pid(), string(),integer(),integer(),binary()) -> ok | {error, message()}
+exec_script(_Db, _Ref, _Dest, _Sql,_Term,_Index,_AParam) ->
     exit(nif_library_not_loaded).
 
 %% @doc

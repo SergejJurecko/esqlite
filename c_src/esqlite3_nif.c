@@ -59,6 +59,7 @@
 #define MAX_PATHNAME 512 /* unfortunately not in sqlite.h. */
 #define PAGE_BUFF_SIZE 9000
 #define MAX_CONNECTIONS 8
+#define PACKET_ITEMS 9
 
 static ErlNifResourceType *esqlite_connection_type = NULL;
 static ErlNifResourceType *esqlite_statement_type = NULL;
@@ -96,13 +97,16 @@ struct esqlite_connection{
     char open;
     int nPages;
     int nPrevPages;
-    unsigned long long writeNumber;
-    unsigned long long writeTermNumber;
+    ErlNifUInt64 writeNumber;
+    ErlNifUInt64 writeTermNumber;
     char wal_configured;
     // only first byte used. Out of 8 possible servers, bit is set for every 
     // server where data should be replicated to.
     int socketFlag;
+    // Fixed part of packet prefix
     ErlNifBinary packetPrefix;
+    // Variable part of packet prefix
+    ErlNifBinary packetVarPrefix;
 };
 
 /* prepared statement */
@@ -227,6 +231,7 @@ write16bit(char *p, int v)
   p[1] = (char)v;
 }
 
+
 void 
 wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
 {
@@ -234,10 +239,11 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
     esqlite_connection *conn = thread->curConn;
     int i = 0;
     int completeSize = 0;
-    struct iovec iov[7];
+    struct iovec iov[PACKET_ITEMS];
     char packetLen[4];
     char lenPrefix[2];
     char lenPage[2];
+    char lenVarPrefix[2];
     char lenHeader = (char)headersize;
     char buff[PAGE_BUFF_SIZE];
     int buffUsed;
@@ -254,10 +260,11 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
     {
         buffUsed = 0;
     }
-    completeSize = buffUsed+2+headersize+1+conn->packetPrefix.size+2;
+    completeSize = buffUsed+2+headersize+1+conn->packetPrefix.size+2+conn->packetVarPrefix.size+2;
     write16bit(lenPage,buffUsed);
     write32bit(packetLen,completeSize);
     write16bit(lenPrefix,conn->packetPrefix.size);
+    write16bit(lenVarPrefix,conn->packetVarPrefix.size);
     // Entire size
     iov[0].iov_base = packetLen;
     iov[0].iov_len = 4;
@@ -266,16 +273,21 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
     iov[1].iov_len = 2;
     iov[2].iov_base = conn->packetPrefix.data;
     iov[2].iov_len = conn->packetPrefix.size;
+    // Variable prefix
+    iov[3].iov_base = lenVarPrefix;
+    iov[3].iov_len = 2;
+    iov[4].iov_base = conn->packetVarPrefix.data;
+    iov[4].iov_len = conn->packetVarPrefix.size;
     // header size and header data
-    iov[3].iov_base = &lenHeader;
-    iov[3].iov_len = 1;
-    iov[4].iov_base = header;
-    iov[4].iov_len = headersize;
+    iov[5].iov_base = &lenHeader;
+    iov[5].iov_len = 1;
+    iov[6].iov_base = header;
+    iov[6].iov_len = headersize;
     // page size and page data
-    iov[5].iov_base = lenPage;
-    iov[5].iov_len = 2;
-    iov[6].iov_base = buff;
-    iov[6].iov_len = buffUsed;
+    iov[7].iov_base = lenPage;
+    iov[7].iov_len = 2;
+    iov[8].iov_base = buff;
+    iov[8].iov_len = buffUsed;
 
     for (i = 0; i < MAX_CONNECTIONS; i++)
     {
@@ -292,7 +304,7 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
             {
                 // sockets are blocking. We presume we are not
                 //  network bound thus there should not be a lot of blocking
-                rt = writev(thread->sockets[i],iov,7);
+                rt = writev(thread->sockets[i],iov,PACKET_ITEMS);
                 if (rt == -1)
                 {
                     // if write fails, unset socket flag and close socket
@@ -303,6 +315,10 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
             }
         }
     }
+
+    // var prefix only sent with first packet
+    conn->packetVarPrefix.data = NULL;
+    conn->packetVarPrefix.size = 0;
 }
 
 static const char *
@@ -692,11 +708,19 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
                                     sqlite3_wal_page_hook(cmd->conn->db,
                                                 wal_page_hook,
                                                 thread,
-                                                &(cmd->conn->writeNumber),
-                                                &(cmd->conn->writeTermNumber));
+                                                (u64*)&(cmd->conn->writeNumber),
+                                                (u64*)&(cmd->conn->writeTermNumber));
 
     if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin))
         return make_error_tuple(cmd->env, "not iolist");
+
+    if (cmd->arg1)
+    {
+        enif_get_uint64(cmd->env,cmd->arg1,&(cmd->conn->writeTermNumber));
+        enif_get_uint64(cmd->env,cmd->arg2,&(cmd->conn->writeNumber));
+        enif_inspect_binary(cmd->env,cmd->arg3,&(cmd->conn->packetVarPrefix));
+    }
+
     end = (char*)bin.data + bin.size;
     readpoint = (char*)bin.data;
     results = enif_make_list(cmd->env,0);
@@ -760,6 +784,7 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
         }
         sqlite3_finalize(statement);
     }
+
     // has number of pages changed
     if (cmd->conn->nPages != nPages)
     {
@@ -1045,6 +1070,7 @@ evaluate_command(esqlite_command *cmd,esqlite_thread *thread)
         else
         {
             cmd->arg = cmd->arg1;
+            cmd->arg1 = 0;
             return do_exec_script(cmd,thread);
         }
     }
@@ -1630,7 +1656,7 @@ esqlite_exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     esqlite_command *cmd = NULL;
     ErlNifPid pid;
      
-    if(argc != 4) 
+    if(argc != 7) 
         return enif_make_badarg(env);  
     if(!enif_get_resource(env, argv[0], esqlite_connection_type, (void **) &db))
         return enif_make_badarg(env);
@@ -1639,6 +1665,15 @@ esqlite_exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return make_error_tuple(env, "invalid_ref");
     if(!enif_get_local_pid(env, argv[2], &pid)) 
         return make_error_tuple(env, "invalid_pid"); 
+    if (!(enif_is_binary(env,argv[3]) || enif_is_list(env,argv[3])))
+        return make_error_tuple(env,"invalid sql");
+    if (!enif_is_number(env,argv[4]))
+        return make_error_tuple(env, "term not number"); 
+    if (!enif_is_number(env,argv[5]))
+        return make_error_tuple(env, "index not number"); 
+    if (!enif_is_binary(env,argv[6]))
+        return make_error_tuple(env, "appendparam not binary"); 
+
     
     void *item = command_create(db->thread);
     cmd = queue_get_item_data(item);
@@ -1649,7 +1684,10 @@ esqlite_exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     cmd->type = cmd_exec_script;
     cmd->ref = enif_make_copy(cmd->env, argv[1]);
     cmd->pid = pid;
-    cmd->arg = enif_make_copy(cmd->env, argv[3]);
+    cmd->arg = enif_make_copy(cmd->env, argv[3]);  // sql string
+    cmd->arg1 = enif_make_copy(cmd->env, argv[4]); // term
+    cmd->arg2 = enif_make_copy(cmd->env, argv[5]); // index
+    cmd->arg3 = enif_make_copy(cmd->env, argv[6]); // appendentries param binary
     cmd->conn = db;
     enif_keep_resource(db);
 
@@ -1950,7 +1988,7 @@ static ErlNifFunc nif_funcs[] = {
     {"open", 5, esqlite_open},
     {"replicate_opts",3,esqlite_replicate_opts},
     {"exec", 4, esqlite_exec},
-    {"exec_script", 4, esqlite_exec_script},
+    {"exec_script", 7, esqlite_exec_script},
     {"prepare", 4, esqlite_prepare},
     {"step", 3, esqlite_step},
     {"noop", 3, esqlite_noop},
