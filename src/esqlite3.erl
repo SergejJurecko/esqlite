@@ -35,7 +35,8 @@
          parse_helper/1,parse_helper/2,wal_pages/1,
          backup_init/2,backup_step/2,backup_finish/1,backup_pages/1,
          lz4_compress/1,lz4_decompress/2,lz4_decompress/3,
-         replicate_opts/3,tcp_connect/4,tcp_connect_async/4,make_wal_header/2]).
+         replicate_opts/2,replicate_status/1,tcp_connect/4,
+         tcp_connect_async/4,make_wal_header/2,tcp_reconnect/0]).
 
 -export([q/2, q/3, map/3, foreach/3]).
 
@@ -52,8 +53,11 @@ parse_helper(Bin) ->
 parse_helper(Bin,Offset) ->
     esqlite3_nif:parse_helper(Bin,Offset).
 
-replicate_opts({connection, _Ref, Connection},SocketFlag,PacketPrefix) ->
-    esqlite3_nif:replicate_opts(Connection,SocketFlag,PacketPrefix).
+replicate_opts({connection, _Ref, Connection},PacketPrefix) ->
+    esqlite3_nif:replicate_opts(Connection,PacketPrefix).
+
+replicate_status({connection, _Ref, Connection}) ->
+    esqlite3_nif:replicate_status(Connection).
 
 tcp_connect(Ip,Port,ConnectStr,ConnNumber) ->
     Ref = make_ref(),
@@ -63,6 +67,8 @@ tcp_connect_async(Ip,Port,ConnectStr,ConnNumber) ->
     Ref = make_ref(),
     esqlite3_nif:tcp_connect(Ref,self(),Ip,Port,ConnectStr,ConnNumber),
     Ref.
+tcp_reconnect() ->
+    esqlite3_nif:tcp_reconnect().
 
 lz4_compress(B) ->
     esqlite3_nif:lz4_compress(B).

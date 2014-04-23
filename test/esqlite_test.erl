@@ -47,7 +47,7 @@ wal_test() ->
     file:delete(Nm),
     {ok, Db,_Res} = esqlite3:open(Nm,0,["PRAGMA journal_mode=wal;PRAGMA journal_size_limit=0;",
                                                 "PRAGMA synchronous=0;PRAGMA page_size=4096;"]),
-    ok = esqlite3:replicate_opts(Db,2#00000011,"PREFIX"),
+    ok = esqlite3:replicate_opts(Db,"PREFIX"),
 
     rec_wal_sock(S1),
     rec_wal_sock(S2),
@@ -72,6 +72,16 @@ wal_test() ->
         infinity,?BIGNUM,?BIGNUM,<<"Variable">>),
     rec_wal_sock(S1),
     rec_wal_sock(S2),
+
+    % gen_tcp:close(S1),
+    % gen_tcp:close(S2),
+
+    % esqlite3:tcp_reconnect(),
+    % {ok,S11} = gen_tcp:accept(LS),
+    % {ok,S22} = gen_tcp:accept(LS),
+    % inet:setopts(S11,[{active,true},{packet,4}]), 
+    % inet:setopts(S22,[{active,true},{packet,4}]), 
+
     {ok,_} = esqlite3:exec_script(["begin;INSERT INTO tab VALUES (5,'aaa');",
         "INSERT INTO tab VALUES (6,'",binary:copy(<<"a">>,100),"');"
                 "commit;"],Db,
@@ -80,10 +90,13 @@ wal_test() ->
     rec_wal_sock(S2),
     {ok,<<Header:32/binary,_WalBin/binary>>} = file:read_file(Nm++"-wal"),
     <<_:16/binary,Salt:8/binary,_/binary>> = Header,
+    ?debugFmt("Wal before close ~p",[filelib:file_size(Nm++"-wal")]),
     esqlite3:close(Db),
+    ?debugFmt("Wal after close ~p",[filelib:file_size(Nm++"-wal")]),
     {ok, Db1,_} = esqlite3:open(Nm,0,["PRAGMA journal_mode=wal;PRAGMA journal_size_limit=0;",
                                                 "PRAGMA synchronous=0;PRAGMA page_size;"]),
     {ok,ReadResult} = esqlite3:exec_script("select * from tab;",Db1),
+    ?debugFmt("After reopen ~p",[ReadResult]),
     esqlite3:close(Db1),
     duplicate_db(Salt,ReadResult),
     ok.
@@ -111,6 +124,8 @@ rec_wal_sock(N,S,Timeout) ->
         {tcp,S,<<"HELLO REPLICATOR!">>} ->
             % ?debugFmt("Received hello ~p",[S]),
             rec_wal_sock(N+1,S,0);
+        {tcp,S,<<>>} ->
+            rec_wal_sock(N+1,S,Timeout);
         {tcp,S,Data} ->
             ok = parse_page(Data),
             rec_wal_sock(N+1,S,0);

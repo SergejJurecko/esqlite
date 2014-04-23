@@ -69,6 +69,15 @@ typedef struct esqlite_connection esqlite_connection;
 typedef struct esqlite_statement esqlite_statement;
 typedef struct esqlite_backup esqlite_backup;
 typedef struct esqlite_thread esqlite_thread;
+typedef struct esqlite_control_data esqlite_control_data;
+
+struct esqlite_control_data {
+    char addresses[MAX_CONNECTIONS][255];
+    int ports[MAX_CONNECTIONS];
+    // connection prefixes
+    ErlNifBinary prefixes[MAX_CONNECTIONS];
+    char isopen[MAX_CONNECTIONS];
+};
 
 struct esqlite_thread {
     queue *commands;
@@ -80,12 +89,13 @@ struct esqlite_thread {
     // so currently executing connection data is accessible from wal callback
     esqlite_connection *curConn; 
     // MAX_CONNECTIONS (8) servers to replicate write log to
-    int sockets[MAX_CONNECTIONS]; 
+    int sockets[MAX_CONNECTIONS];
+    esqlite_control_data *control;
 };
 int g_nthreads;
 
 esqlite_thread* g_threads;
-esqlite_thread g_interrupt_thread;
+esqlite_thread g_control_thread;
 
 ErlNifUInt64 g_dbcount = 0;
 ErlNifMutex *g_dbcount_mutex = NULL;
@@ -100,9 +110,15 @@ struct esqlite_connection{
     ErlNifUInt64 writeNumber;
     ErlNifUInt64 writeTermNumber;
     char wal_configured;
+    // For every write:
+    // over how many connections data has been sent
+    char nSent;
+    // Set bit for every failed attempt to write to socket of connection
+    char failFlags;
+    char doReplicate;
     // only first byte used. Out of 8 possible servers, bit is set for every 
     // server where data should be replicated to.
-    int socketFlag;
+    // int socketFlag;
     // Fixed part of packet prefix
     ErlNifBinary packetPrefix;
     // Variable part of packet prefix
@@ -141,7 +157,8 @@ typedef enum {
     cmd_backup_finish,
     cmd_interrupt,
     cmd_tcp_connect,
-    cmd_set_socket
+    cmd_set_socket,
+    cmd_tcp_reconnect
 } command_type;
 
 typedef struct {
@@ -176,6 +193,7 @@ void write32bit(char *p, int v);
 void write16bit(char *p, int v);
 void wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize);
 void *command_create(int threadnum);
+static ERL_NIF_TERM do_tcp_connect1(esqlite_command *cmd, esqlite_thread* thread, int pos);
 
 static ERL_NIF_TERM 
 make_atom(ErlNifEnv *env, const char *atom_name) 
@@ -237,6 +255,7 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
 {
     esqlite_thread *thread = (esqlite_thread *) data;
     esqlite_connection *conn = thread->curConn;
+    esqlite_command *ncmd = NULL;
     int i = 0;
     int completeSize = 0;
     struct iovec iov[PACKET_ITEMS];
@@ -249,8 +268,10 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
     int buffUsed;
     int rt;
 
-    if (conn->socketFlag == 0)
+    if (!conn->doReplicate)
         return;
+    conn->nSent = conn->failFlags = 0;
+
 
     if (pagesize > 0 && LZ4_COMPRESSBOUND(pagesize) < PAGE_BUFF_SIZE)
     {
@@ -291,28 +312,27 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
 
     for (i = 0; i < MAX_CONNECTIONS; i++)
     {
-        // Connections are identified by bits in socketFlag
-        //  if bit is set, data should be sent
-        if (conn->socketFlag & (1 << i))
+        if (thread->sockets[i] > 3)
         {
-            // If bit set but connection not established, reset it
-            if (thread->sockets[i] < 3)
+            // sockets are blocking. We presume we are not
+            //  network bound thus there should not be a lot of blocking
+            rt = writev(thread->sockets[i],iov,PACKET_ITEMS);
+            if (rt == -1)
             {
-                conn->socketFlag &= ~(1 << i);
+                conn->failFlags |= (1 << i);
+
+                close(thread->sockets[i]);
+                thread->sockets[i] = 0;
+
+                // tell control thread to create new connections for position i
+                void *item = command_create(-1);
+                ncmd = queue_get_item_data(item);
+                ncmd->type = cmd_tcp_connect;
+                ncmd->arg3 = enif_make_int(ncmd->env,i);
+                push_command(-1, item);
             }
             else
-            {
-                // sockets are blocking. We presume we are not
-                //  network bound thus there should not be a lot of blocking
-                rt = writev(thread->sockets[i],iov,PACKET_ITEMS);
-                if (rt == -1)
-                {
-                    // if write fails, unset socket flag and close socket
-                    conn->socketFlag &= ~(1 << i);
-                    close(thread->sockets[i]);
-                    thread->sockets[i] = 0;
-                }
-            }
+                conn->nSent++;
         }
     }
 
@@ -395,7 +415,7 @@ command_create(int threadnum)
 {
     esqlite_thread *thread = NULL;
     if (threadnum == -1)
-        thread = &g_interrupt_thread;
+        thread = &g_control_thread;
     else
         thread = &(g_threads[threadnum]);
 
@@ -566,35 +586,84 @@ do_interrupt(esqlite_command *cmd, esqlite_thread *thread)
 }
 
 static ERL_NIF_TERM
+do_tcp_reconnect(esqlite_command *cmd, esqlite_thread *thread)
+{
+    int i;
+
+    if (!thread->control)
+        return atom_ok;
+
+    for (i = 0; i < MAX_CONNECTIONS; i++)
+    {
+        // address set and not open
+        if (!thread->control->addresses[i][0] && !thread->control->isopen)
+        {
+            do_tcp_connect1(cmd,thread, i);
+        }
+    }
+    return atom_ok;
+}
+
+static ERL_NIF_TERM
 do_tcp_connect(esqlite_command *cmd, esqlite_thread *thread)
 {
-    char ip[128];
-    int port;
+    int pos;
     ErlNifBinary bin;
+    
+
+    if (!thread->control)
+    {
+        thread->control = enif_alloc(sizeof(esqlite_control_data));
+        memset(thread->control,0,sizeof(esqlite_control_data));
+    }
+    if (!enif_get_int(cmd->env,cmd->arg3,&pos))
+        return enif_make_badarg(cmd->env);
+
+    if (pos < 0 || pos > 7)
+        return enif_make_badarg(cmd->env);
+
+    // this can be called from erlang, or it can be called
+    // from a thread that has lost connection.
+    // If called from a thread, only pos is sent in arg3. Everything else
+    //  has already been set on first call from erlang.
+    if (cmd->arg)
+    {
+        if (!enif_get_string(cmd->env, cmd->arg,thread->control->addresses[pos],255,ERL_NIF_LATIN1))
+            return enif_make_badarg(cmd->env);
+        if (!enif_get_int(cmd->env,cmd->arg1,&(thread->control->ports[pos])))
+            return enif_make_badarg(cmd->env);
+        if (!enif_inspect_iolist_as_binary(cmd->env,cmd->arg2,&bin))
+            return enif_make_badarg(cmd->env);
+
+        enif_alloc_binary(bin.size,&(thread->control->prefixes[pos]));
+        memcpy(thread->control->prefixes[pos].data,bin.data,bin.size);
+    }
+    else
+    {
+        bin = thread->control->prefixes[pos];
+    }
+
+    return do_tcp_connect1(cmd,thread,pos);
+}
+
+static ERL_NIF_TERM
+do_tcp_connect1(esqlite_command *cmd, esqlite_thread* thread, int pos)
+{
     int i;
     struct sockaddr_in addr;
     int fd;
-    int pos;
+    ERL_NIF_TERM result = atom_ok;
     esqlite_command *ncmd = NULL;
     struct iovec iov[2];
     char packetLen[4];
     int *sockets;
-    ERL_NIF_TERM result = atom_ok;
 
-    if (!enif_get_string(cmd->env, cmd->arg,ip,128,ERL_NIF_LATIN1))
-        return enif_make_badarg(cmd->env);
-    if (!enif_get_int(cmd->env,cmd->arg1,&port))
-        return enif_make_badarg(cmd->env);
-    if (!enif_inspect_iolist_as_binary(cmd->env,cmd->arg2,&bin))
-        return enif_make_badarg(cmd->env);
-    if (!enif_get_int(cmd->env,cmd->arg3,&pos))
-        return enif_make_badarg(cmd->env);
 
-    write32bit(packetLen,bin.size);
+    write32bit(packetLen,thread->control->prefixes[pos].size);
     iov[0].iov_base = packetLen;
     iov[0].iov_len = 4;
-    iov[1].iov_base = bin.data;
-    iov[1].iov_len = bin.size;
+    iov[1].iov_base = thread->control->prefixes[pos].data;
+    iov[1].iov_len = thread->control->prefixes[pos].size;
 
     sockets = enif_alloc(sizeof(int)*g_nthreads);
     memset(sockets,0,sizeof(int)*g_nthreads);
@@ -604,8 +673,8 @@ do_tcp_connect(esqlite_command *cmd, esqlite_thread *thread)
         fd = socket(AF_INET,SOCK_STREAM,0);
         memset(&addr,0,sizeof(addr));
         addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = inet_addr(ip);
-        addr.sin_port = htons(port);
+        addr.sin_addr.s_addr = inet_addr(thread->control->addresses[pos]);
+        addr.sin_port = htons(thread->control->ports[pos]);
 
         if (connect(fd, (const void *)&addr, sizeof(addr)) == -1)
         {
@@ -613,33 +682,30 @@ do_tcp_connect(esqlite_command *cmd, esqlite_thread *thread)
             result = make_error_tuple(cmd->env,"unable to connect");
             break;
         }
-        // if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1)
-        // {
-        //     close(fd);
-        //     return make_error_tuple(cmd->env,"unable to set nonblock");
-        // }
 
         struct timeval timeout;      
         timeout.tv_sec = 2;
         timeout.tv_usec = 0;
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (char *)&timeout, sizeof(timeout));
 
-        if (bin.size+4 != writev(fd,iov,2))
+        if (thread->control->prefixes[pos].size+4 != writev(fd,iov,2))
         {
             close(fd);
             result = make_error_tuple(cmd->env,"unable to initialize");
             break;
-        }            
+        }
 
         int flag = 1;
         setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (char*)&flag, sizeof(int));
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char*)&flag, sizeof(int));
-        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char *) &flag, sizeof(int));
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char*)&flag, sizeof(int));
 
         sockets[i] = fd;
     }
     if (result == atom_ok)
     {
+        thread->control->isopen[pos] = 1;
+
         for (i = 0; i < g_nthreads; i++)
         {
             void *item = command_create(i);
@@ -652,6 +718,8 @@ do_tcp_connect(esqlite_command *cmd, esqlite_thread *thread)
     }
     else
     {
+        thread->control->isopen[pos] = 0;
+
         for (i = 0; i < g_nthreads; i++)
         {
             if (sockets[i])
@@ -1100,6 +1168,8 @@ evaluate_command(esqlite_command *cmd,esqlite_thread *thread)
         return atom_ok;
     case cmd_tcp_connect:
         return do_tcp_connect(cmd,thread);
+    case cmd_tcp_reconnect:
+        return do_tcp_reconnect(cmd,thread);
     case cmd_set_socket:
     {
         int fd = 0;
@@ -1109,12 +1179,29 @@ evaluate_command(esqlite_command *cmd,esqlite_thread *thread)
         if (!enif_get_int(cmd->env,cmd->arg1,&pos))
             return atom_error;
 
-        if (fd > 0 && pos >= 0 && pos < 8)
+        if (fd > 3 && pos >= 0 && pos < 8)
         {
-            if (thread->sockets[pos] > 0)
-                close(thread->sockets[pos]);
-            thread->sockets[pos] = fd;
-            return atom_ok;    
+            if (thread->sockets[pos] > 3)
+            {
+                char zero[4];
+                memset(zero,0,4);
+                
+                // check if connection open, if it is do not use new socket
+                if (write(thread->sockets[pos],zero,4) == -1)
+                {
+                    close(thread->sockets[pos]);
+                    thread->sockets[pos] = fd;
+                }
+                else
+                {
+                    close(fd);
+                }
+                    
+            }
+            else
+                thread->sockets[pos] = fd;
+            
+            return atom_ok;
         }
         return atom_error;
     }
@@ -1129,7 +1216,7 @@ push_command(int threadnum, void *item)
 {
     esqlite_thread *thread = NULL;
     if (threadnum == -1)
-        thread = &g_interrupt_thread;
+        thread = &g_control_thread;
     else
         thread = &(g_threads[threadnum]);
 
@@ -1169,7 +1256,10 @@ esqlite_thread_func(void *arg)
         else
         {
             if (cmd->ref == 0)
+            {
                 evaluate_command(cmd,data);
+                enif_clear_env(cmd->env);
+            }
             else
             {
                 enif_send(NULL, &cmd->pid, cmd->env, make_answer(cmd, evaluate_command(cmd,data)));
@@ -1179,6 +1269,13 @@ esqlite_thread_func(void *arg)
         }
     }
     queue_destroy(data->commands);
+
+    if (data->control)
+    {
+        enif_free(data->control);
+        data->control = NULL;
+    }
+        
   
     data->alive = 0;
     return NULL;
@@ -1276,27 +1373,45 @@ esqlite_replicate_opts(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     esqlite_connection* conn;
     ErlNifBinary bin;
 
-    if (argc != 3)
+    if (argc != 2)
         return enif_make_badarg(env);
 
     if(!enif_get_resource(env, argv[0], esqlite_connection_type, (void **) &conn))
     {
         return enif_make_badarg(env);
     }
-    if (!enif_get_int(env,argv[1],&(conn->socketFlag)))
-        return enif_make_badarg(env);
-    if (!conn->packetPrefix.size)
-    {
-        if (!enif_inspect_iolist_as_binary(env, argv[2], &bin))
-            return enif_make_badarg(env);
 
-        enif_alloc_binary(bin.size,&(conn->packetPrefix));
-        memcpy(conn->packetPrefix.data,bin.data,bin.size);
-    }
+    conn->doReplicate = 1;
+
+    // if (!enif_get_int(env,argv[1],&(conn->socketFlag)))
+    //     return enif_make_badarg(env);
+    if (!conn->packetPrefix.size)
+        enif_release_binary(&conn->packetPrefix);
+
+    if (!enif_inspect_iolist_as_binary(env, argv[1], &bin))
+        return enif_make_badarg(env);
+
+    enif_alloc_binary(bin.size,&(conn->packetPrefix));
+    memcpy(conn->packetPrefix.data,bin.data,bin.size);
 
     return atom_ok;
 }
 
+static ERL_NIF_TERM
+esqlite_replicate_status(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    esqlite_connection* conn;
+
+    if (argc != 1)
+        return enif_make_badarg(env);
+
+    if(!enif_get_resource(env, argv[0], esqlite_connection_type, (void **) &conn))
+    {
+        return enif_make_badarg(env);
+    }
+    
+    return enif_make_tuple2(env,enif_make_int(env,conn->nSent),enif_make_int(env,conn->failFlags));
+}
 // Called with: ref,pid, ip, port, connect string, connection number
 static ERL_NIF_TERM
 tcp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
@@ -1331,6 +1446,20 @@ tcp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     cmd->arg3 = argv[5];
     cmd->ref = enif_make_copy(cmd->env, argv[0]);
     cmd->pid = pid;
+
+    return push_command(-1,item);
+}
+
+static ERL_NIF_TERM
+tcp_reconnect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    esqlite_command *cmd = NULL;
+
+    void *item = command_create(-1);
+    cmd = queue_get_item_data(item);
+    if(!cmd)
+        return make_error_tuple(env, "command_create_failed");
+    cmd->type = cmd_tcp_reconnect;
 
     return push_command(-1,item);
 }
@@ -1939,11 +2068,11 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     
     g_threads = (esqlite_thread*)malloc(sizeof(esqlite_thread)*g_nthreads);
     memset(g_threads,0,sizeof(esqlite_thread)*g_nthreads);
-    memset(&g_interrupt_thread,0,sizeof(esqlite_thread));
-    g_interrupt_thread.index = i;
-    g_interrupt_thread.commands = queue_create(command_destroy);
+    memset(&g_control_thread,0,sizeof(esqlite_thread));
+    g_control_thread.index = -1;
+    g_control_thread.commands = queue_create(command_destroy);
 
-    if(enif_thread_create("esqlite_connection", &(g_interrupt_thread.tid), esqlite_thread_func, &(g_interrupt_thread), NULL) != 0) 
+    if(enif_thread_create("esqlite_connection", &(g_control_thread.tid), esqlite_thread_func, &(g_control_thread), NULL) != 0) 
     {
         printf("Unable to create esqlite3 thread\r\n");
         return -1;
@@ -1979,14 +2108,15 @@ on_unload(ErlNifEnv* env, void* priv_data)
         if (i >= 0)
             enif_thread_join((ErlNifTid)g_threads[i].tid,NULL);
         else
-            enif_thread_join((ErlNifTid)g_interrupt_thread.tid,NULL);
+            enif_thread_join((ErlNifTid)g_control_thread.tid,NULL);
     }
 }
 
 static ErlNifFunc nif_funcs[] = {
     {"open", 4, esqlite_open},
     {"open", 5, esqlite_open},
-    {"replicate_opts",3,esqlite_replicate_opts},
+    {"replicate_opts",2,esqlite_replicate_opts},
+    {"replicate_status",1,esqlite_replicate_status},
     {"exec", 4, esqlite_exec},
     {"exec_script", 7, esqlite_exec_script},
     {"prepare", 4, esqlite_prepare},
@@ -2007,6 +2137,7 @@ static ErlNifFunc nif_funcs[] = {
     {"lz4_decompress",2,esqlite_lz4_decompress},
     {"lz4_decompress",3,esqlite_lz4_decompress},
     {"tcp_connect",6,tcp_connect},
+    {"tcp_reconnect",0,tcp_reconnect},
     {"wal_header",2,wal_header}
 };
 
