@@ -46,14 +46,14 @@
          tcp_connect/6,
          tcp_reconnect/0,
          replicate_opts/2,
-         wal_header/2,
+         wal_header/1,
          replicate_status/1
 ]).
 
 replicate_status(_) ->
     exit(nif_library_not_loaded).
 
-wal_header(_,_) ->
+wal_header(_) ->
     exit(nif_library_not_loaded).
 
 noop(_,_,_) ->

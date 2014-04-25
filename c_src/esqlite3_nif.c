@@ -1470,19 +1470,12 @@ wal_header(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     int szPage;
     u32 aCksum[2];                /* Checksum for wal-header */
     ErlNifBinary binOut;
-    ErlNifBinary binSalt;
 
-    if (argc != 2)
+    if (argc != 1)
         enif_make_badarg(env);
 
     if (!enif_get_int(env,argv[0],&szPage))
         return enif_make_badarg(env);
-
-    if (!enif_inspect_binary(env,argv[1],&binSalt))
-        return enif_make_badarg(env);
-    if (binSalt.size != 8)
-        return enif_make_badarg(env);
-        
 
     enif_alloc_binary(WAL_HDRSIZE,&binOut);
 
@@ -1490,7 +1483,10 @@ wal_header(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     sqlite3Put4byte(&binOut.data[4], WAL_MAX_VERSION);
     sqlite3Put4byte(&binOut.data[8], szPage);
     sqlite3Put4byte(&binOut.data[12], 0);
-    memcpy(&binOut.data[16], binSalt.data, 8);
+    // Salt has fixed values
+    sqlite3Put4byte(&binOut.data[16], 123456789);
+    sqlite3Put4byte(&binOut.data[20], 987654321);
+    // memcpy(&binOut.data[16], binSalt.data, 8);
     walChecksumBytes(1, binOut.data, WAL_HDRSIZE-2*4, 0, aCksum);
     sqlite3Put4byte(&binOut.data[24], aCksum[0]);
     sqlite3Put4byte(&binOut.data[28], aCksum[1]);
@@ -2138,7 +2134,7 @@ static ErlNifFunc nif_funcs[] = {
     {"lz4_decompress",3,esqlite_lz4_decompress},
     {"tcp_connect",6,tcp_connect},
     {"tcp_reconnect",0,tcp_reconnect},
-    {"wal_header",2,wal_header}
+    {"wal_header",1,wal_header}
 };
 
 ERL_NIF_INIT(esqlite3_nif, nif_funcs, on_load, NULL, NULL, on_unload);

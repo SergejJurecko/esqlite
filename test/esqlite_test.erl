@@ -101,9 +101,9 @@ wal_test() ->
     duplicate_db(Salt,ReadResult),
     ok.
 
-duplicate_db(Salt,ReadResult) ->
+duplicate_db(_Salt,ReadResult) ->
     Nm = "waltest_copy",
-    Header = esqlite3:make_wal_header(4096,Salt),
+    Header = esqlite3:make_wal_header(4096),
     file:write_file(Nm++"-wal",[Header|lists:reverse(get(walframes))],[write,binary]),
     {ok, Db,_Out} = esqlite3:open(Nm,0,["PRAGMA journal_mode=wal;PRAGMA journal_size_limit=0;",
                                                 "PRAGMA synchronous=0;PRAGMA page_size;"]),
