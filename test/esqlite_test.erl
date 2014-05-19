@@ -33,8 +33,8 @@ wal_test() ->
     inet:setopts(S2,[{active,true},{packet,4}]), 
 
     % Get hello
-    rec_wal_sock(S1),
-    rec_wal_sock(S2),
+    rec_wal_sock(S1,0),
+    rec_wal_sock(S2,0),
 
     Nm = "waltest",
     % case filelib:file_size(Nm) > 0 of
@@ -49,29 +49,29 @@ wal_test() ->
                                                 "PRAGMA synchronous=0;PRAGMA page_size=4096;"]),
     ok = esqlite3:replicate_opts(Db,"PREFIX"),
 
-    rec_wal_sock(S1),
-    rec_wal_sock(S2),
+    rec_wal_sock(S1,0),
+    rec_wal_sock(S2,0),
 
     {ok,_} = esqlite3:exec_script("CREATE TABLE tab (id INTEGER PRIMARY KEY, val TEXT);",Db,
                 infinity,?BIGNUM,?BIGNUM,<<"Variable">>),
-    rec_wal_sock(S1),
-    rec_wal_sock(S2),
+    rec_wal_sock(S1,?BIGNUM),
+    rec_wal_sock(S2,?BIGNUM),
     {ok,_} = esqlite3:exec_script("INSERT INTO tab VALUES (1,'aaa');",Db,
-        infinity,?BIGNUM,?BIGNUM,<<"Variable">>),
-    rec_wal_sock(S1),
-    rec_wal_sock(S2),
+        infinity,?BIGNUM-1,?BIGNUM-1,<<"Variable">>),
+    rec_wal_sock(S1,?BIGNUM-1),
+    rec_wal_sock(S2,?BIGNUM-1),
     {ok,_} = esqlite3:exec_script("INSERT INTO tab VALUES (2,'aaa');",Db,
-        infinity,?BIGNUM,?BIGNUM,<<"Variable">>),
-    rec_wal_sock(S1),
-    rec_wal_sock(S2),
+        infinity,?BIGNUM-2,?BIGNUM-2,<<"Variable">>),
+    rec_wal_sock(S1,?BIGNUM-2),
+    rec_wal_sock(S2,?BIGNUM-2),
     {ok,_} = esqlite3:exec_script("INSERT INTO tab VALUES (3,'aaa');",Db,
-        infinity,?BIGNUM,?BIGNUM,<<"Variable">>),
-    rec_wal_sock(S1),
-    rec_wal_sock(S2),
+        infinity,?BIGNUM-3,?BIGNUM-3,<<"Variable">>),
+    rec_wal_sock(S1,?BIGNUM-3),
+    rec_wal_sock(S2,?BIGNUM-3),
     {ok,_} = esqlite3:exec_script("INSERT INTO tab VALUES (4,'aaa');",Db,
-        infinity,?BIGNUM,?BIGNUM,<<"Variable">>),
-    rec_wal_sock(S1),
-    rec_wal_sock(S2),
+        infinity,?BIGNUM-4,?BIGNUM-4,<<"Variable">>),
+    rec_wal_sock(S1,?BIGNUM-4),
+    rec_wal_sock(S2,?BIGNUM-4),
 
     % gen_tcp:close(S1),
     % gen_tcp:close(S2),
@@ -85,9 +85,9 @@ wal_test() ->
     {ok,_} = esqlite3:exec_script(["begin;INSERT INTO tab VALUES (5,'aaa');",
         "INSERT INTO tab VALUES (6,'",binary:copy(<<"a">>,100),"');"
                 "commit;"],Db,
-                infinity,?BIGNUM,?BIGNUM,<<"Variable">>),
-    rec_wal_sock(S1),
-    rec_wal_sock(S2),
+                infinity,?BIGNUM-5,?BIGNUM-5,<<"Variable">>),
+    rec_wal_sock(S1,?BIGNUM-5),
+    rec_wal_sock(S2,?BIGNUM-5),
     {ok,<<Header:32/binary,_WalBin/binary>>} = file:read_file(Nm++"-wal"),
     <<_:16/binary,Salt:8/binary,_/binary>> = Header,
     ?debugFmt("Wal before close ~p",[filelib:file_size(Nm++"-wal")]),
@@ -117,18 +117,18 @@ duplicate_db(_Salt,ReadResult) ->
     esqlite3:close(Db),
     ok.
 
-rec_wal_sock(S) ->
-    rec_wal_sock(0,S,100).
-rec_wal_sock(N,S,Timeout) ->
+rec_wal_sock(S,Num) ->
+    rec_wal_sock(0,S,100,Num).
+rec_wal_sock(N,S,Timeout,Num) ->
     receive
         {tcp,S,<<"HELLO REPLICATOR!">>} ->
             % ?debugFmt("Received hello ~p",[S]),
-            rec_wal_sock(N+1,S,0);
+            rec_wal_sock(N+1,S,0,Num);
         {tcp,S,<<>>} ->
-            rec_wal_sock(N+1,S,Timeout);
+            rec_wal_sock(N+1,S,Timeout,Num);
         {tcp,S,Data} ->
-            ok = parse_page(Data),
-            rec_wal_sock(N+1,S,0);
+            ok = parse_page(Data,Num),
+            rec_wal_sock(N+1,S,0,Num);
         {tcp_closed,S} ->
             closed
     after Timeout ->
@@ -137,12 +137,12 @@ rec_wal_sock(N,S,Timeout) ->
 parse_page(<<_LenPrefix:16/unsigned,"PREFIX",
              LenVarPrefix:16/unsigned,VarPrefix:LenVarPrefix/binary,
              LenHeader,Header:LenHeader/binary,
-             LenPage:16,Page:LenPage/binary,Rem/binary>>) ->
+             LenPage:16,Page:LenPage/binary,Rem/binary>>,Num) ->
     case LenPage of
         0 ->
             ok;
         _ ->
-            <<_PN:32,_DBSize:32,(?BIGNUM):64/unsigned,(?BIGNUM):64/unsigned,_/binary>> = Header,
+            <<_PN:32,_DBSize:32,(Num):64/unsigned,(Num):64/unsigned,_/binary>> = Header,
             case VarPrefix of
                 <<>> ->
                     ok;
@@ -151,8 +151,8 @@ parse_page(<<_LenPrefix:16/unsigned,"PREFIX",
             end,
             put(walframes,[[Header,esqlite3:lz4_decompress(Page,4096)]|get(walframes)])
     end,
-    parse_page(Rem);
-parse_page(<<>>) ->
+    parse_page(Rem,Num);
+parse_page(<<>>,_) ->
     ok.
 
 lz4_test() ->

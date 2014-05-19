@@ -854,16 +854,16 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
     }
 
     // has number of pages changed
-    if (cmd->conn->nPages != nPages)
-    {
-        if (rc != SQLITE_ERROR && rc != SQLITE_INTERRUPT)
-        {
-            write32bit(pagesBuff,cmd->conn->nPages - cmd->conn->nPrevPages);
-            wal_page_hook(thread,NULL,0,pagesBuff,4);
-        }
-        else
-            wal_page_hook(thread,NULL,0,NULL,0);
-    }
+    // if (cmd->conn->nPages != nPages)
+    // {
+    //     if (rc != SQLITE_ERROR && rc != SQLITE_INTERRUPT)
+    //     {
+    //         write32bit(pagesBuff,cmd->conn->nPages - cmd->conn->nPrevPages);
+    //         // wal_page_hook(thread,NULL,0,pagesBuff,4);
+    //     }
+    //     // else
+    //     //     wal_page_hook(thread,NULL,0,NULL,0);
+    // }
 
     enif_release_resource(cmd->conn);
     if (rc == SQLITE_ERROR)
