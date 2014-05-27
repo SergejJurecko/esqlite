@@ -768,8 +768,8 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
     char skip = 0;
     int statementlen = 0;
     ERL_NIF_TERM rows;
-    char pagesBuff[4];
-    int nPages = cmd->conn->nPages;
+    // char pagesBuff[4];
+    // int nPages = cmd->conn->nPages;
 
     if (!cmd->conn->wal_configured)
         cmd->conn->wal_configured = SQLITE_OK == 
@@ -1495,6 +1495,35 @@ wal_header(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 }
 
 static ERL_NIF_TERM
+wal_checksum(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    u32 cksum1,cksum2;
+    u32 aCksum[2] = {0,0};
+    ErlNifBinary bin;
+    int size;
+
+    if (argc != 4)
+        enif_make_badarg(env);
+
+    if (!enif_inspect_binary(env,argv[0], &bin))
+        return enif_make_badarg(env);
+
+    if (!enif_get_uint(env,argv[1], &cksum1))
+        return enif_make_badarg(env);
+    if (!enif_get_uint(env,argv[2], &cksum2))
+        return enif_make_badarg(env); 
+    if (!enif_get_int(env,argv[3], &size))
+        return enif_make_badarg(env); 
+
+    aCksum[0] = cksum1;
+    aCksum[1] = cksum2;
+
+    walChecksumBytes(1, bin.data, size, aCksum, aCksum);
+
+    return enif_make_tuple2(env,enif_make_uint(env,aCksum[0]),enif_make_uint(env,aCksum[1]));
+}
+
+static ERL_NIF_TERM
 esqlite_interrupt_query(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     esqlite_command *cmd = NULL;
@@ -2134,7 +2163,8 @@ static ErlNifFunc nif_funcs[] = {
     {"lz4_decompress",3,esqlite_lz4_decompress},
     {"tcp_connect",6,tcp_connect},
     {"tcp_reconnect",0,tcp_reconnect},
-    {"wal_header",1,wal_header}
+    {"wal_header",1,wal_header},
+    {"wal_checksum",4,wal_checksum}
 };
 
 ERL_NIF_INIT(esqlite3_nif, nif_funcs, on_load, NULL, NULL, on_unload);

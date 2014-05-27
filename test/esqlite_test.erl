@@ -7,12 +7,11 @@
 -include_lib("eunit/include/eunit.hrl").
 -define(BIGNUM,18446744073709551610).
 
-% interrupt_test() ->
-%     esqlite3:init(2),
-%     {ok, Db} = esqlite3:open("../user"),
-%     {error,query_aborted} = esqlite3:exec_script("delete from t_dir "++"where eid > 2800 and eid < 3900;",Db,1000),
-%     ok.
-
+% % interrupt_test() ->
+% %     esqlite3:init(2),
+% %     {ok, Db} = esqlite3:open("../user"),
+% %     {error,query_aborted} = esqlite3:exec_script("delete from t_dir "++"where eid > 2800 and eid < 3900;",Db,1000),
+% %     ok.
 
 
 wal_test() ->
@@ -104,6 +103,7 @@ wal_test() ->
 duplicate_db(_Salt,ReadResult) ->
     Nm = "waltest_copy",
     Header = esqlite3:make_wal_header(4096),
+    file:copy("waltest",Nm),
     file:write_file(Nm++"-wal",[Header|lists:reverse(get(walframes))],[write,binary]),
     {ok, Db,_Out} = esqlite3:open(Nm,0,["PRAGMA journal_mode=wal;PRAGMA journal_size_limit=0;",
                                                 "PRAGMA synchronous=0;PRAGMA page_size;"]),
@@ -137,19 +137,22 @@ rec_wal_sock(N,S,Timeout,Num) ->
 parse_page(<<_LenPrefix:16/unsigned,"PREFIX",
              LenVarPrefix:16/unsigned,VarPrefix:LenVarPrefix/binary,
              LenHeader,Header:LenHeader/binary,
-             LenPage:16,Page:LenPage/binary,Rem/binary>>,Num) ->
+             LenPage:16,Page1:LenPage/binary,Rem/binary>>,Num) ->
     case LenPage of
         0 ->
             ok;
         _ ->
-            <<_PN:32,_DBSize:32,(Num):64/unsigned,(Num):64/unsigned,_/binary>> = Header,
+            <<_PN:32,_DBSize:32,(Num):64/unsigned,(Num):64/unsigned,_:32,_:32,Chk1:32/unsigned-big,Chk2:32/unsigned-big,_/binary>> = Header,
+            Page = esqlite3:lz4_decompress(Page1,4096),
+            {C1,C2} = esqlite3:wal_checksum(Header,0,0,32),
+            {Chk1,Chk2} = esqlite3:wal_checksum(Page,C1,C2,byte_size(Page)),
             case VarPrefix of
                 <<>> ->
                     ok;
                 <<"Variable">> ->
                     ok
             end,
-            put(walframes,[[Header,esqlite3:lz4_decompress(Page,4096)]|get(walframes)])
+            put(walframes,[[Header,Page]|get(walframes)])
     end,
     parse_page(Rem,Num);
 parse_page(<<>>,_) ->

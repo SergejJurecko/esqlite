@@ -47,8 +47,12 @@
          tcp_reconnect/0,
          replicate_opts/2,
          wal_header/1,
+         wal_checksum/4,
          replicate_status/1
 ]).
+
+wal_checksum(_,_,_,_) ->
+    exit(nif_library_not_loaded).
 
 replicate_status(_) ->
     exit(nif_library_not_loaded).
