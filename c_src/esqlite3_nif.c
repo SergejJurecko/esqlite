@@ -758,7 +758,7 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
     ErlNifBinary bin;
     int rc = 0,i;
     unsigned int rowcount = 0;
-    sqlite3_stmt *statement;
+    sqlite3_stmt *statement = NULL;
     const char *readpoint;
     const char *end;
     int column_count;
@@ -768,6 +768,7 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
     char skip = 0;
     int statementlen = 0;
     ERL_NIF_TERM rows;
+    char *errat = NULL;
     // char pagesBuff[4];
     // int nPages = cmd->conn->nPages;
 
@@ -806,7 +807,9 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
         rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, &(statement), &readpoint);
         if(rc != SQLITE_OK)
         {
+            errat = "prepare";
             rc = SQLITE_ERROR;
+            sqlite3_finalize(statement);
             break;
         }
          
@@ -837,7 +840,11 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
         }
 
         if (rc == SQLITE_ERROR || rc == SQLITE_INTERRUPT)
+        {
+            errat = "step";
+            sqlite3_finalize(statement);
             break;
+        }
         
         if (skip == 0 && (rowcount > 0 || column_count > 0))
             results = enif_make_list_cell(cmd->env, enif_make_list2(cmd->env,enif_make_tuple2(cmd->env,atom_columns,column_names),
@@ -867,7 +874,7 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
 
     enif_release_resource(cmd->conn);
     if (rc == SQLITE_ERROR)
-        return make_sqlite3_error_tuple(cmd->env, "exec_script", rc, cmd->conn->db);
+        return make_sqlite3_error_tuple(cmd->env, errat, rc, cmd->conn->db);
     else if (rc == SQLITE_INTERRUPT)
     {
         return make_error_tuple(cmd->env, "query_aborted");
@@ -2044,6 +2051,11 @@ esqlite_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     return push_command(conn->thread, item);
 }
 
+// void errLogCallback(void *pArg, int iErrCode, const char *zMsg)
+// {
+// }
+
+
 /*
  * Load the nif. Initialize some stuff and such
  */
@@ -2053,6 +2065,8 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     ErlNifResourceType *rt;
     int i = 0;
 
+    sqlite3_initialize();
+    // sqlite3_config(SQLITE_CONFIG_LOG, errLogCallback, NULL);
 
     // sqlite3_vfs_register(sqlite3_vfs_find("unix-nolock"), 1);    
 
