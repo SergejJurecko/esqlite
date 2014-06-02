@@ -332,9 +332,10 @@ column_names(Stmt) ->
 %% @spec close(connection()) -> ok | {error, error_message()}
 -spec close(connection()) -> ok | {error, _}.
 close( {connection, _Ref, Connection}) ->
-    Ref = make_ref(),
-    ok = esqlite3_nif:close(Connection, Ref, self()),
-    receive_answer(Ref).
+    ok.
+    % Ref = make_ref(),
+    % ok = esqlite3_nif:close(Connection, Ref, self()),
+    % receive_answer(Ref).
 
 %% Internal functions
 add_eos(IoList) ->

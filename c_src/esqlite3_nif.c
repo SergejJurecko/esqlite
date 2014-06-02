@@ -103,6 +103,7 @@ ErlNifMutex *g_dbcount_mutex = NULL;
 /* database connection context */
 struct esqlite_connection{
     unsigned int thread;
+    unsigned int randnum;
     sqlite3 *db;
     char open;
     int nPages;
@@ -381,8 +382,8 @@ get_sqlite3_return_code_msg(int r)
 static const char *
 get_sqlite3_error_msg(int error_code, sqlite3 *db)
 {
-    if(error_code == SQLITE_MISUSE) 
-        return "Sqlite3 was invoked incorrectly.";
+    // if(error_code == SQLITE_MISUSE) 
+    //     return "Sqlite3 was invoked incorrectly.";
 
     return sqlite3_errmsg(db); 
 }
@@ -445,19 +446,24 @@ static void
 destruct_esqlite_connection(ErlNifEnv *env, void *arg)
 {
     esqlite_connection *conn = (esqlite_connection *) arg;
-    if (conn->open)
-    {
-        void *item = command_create(conn->thread);
-        esqlite_command *cmd = queue_get_item_data(item);
-  
-        /* Send the stop command 
-         */
-        cmd->type = cmd_close;
-        cmd->p = conn->db;
-        cmd->ref = 0;
+    if (!conn->open)
+        return;
 
-        push_command(conn->thread, item);
-    }
+    if (!conn->packetPrefix.size)
+        enif_release_binary(&conn->packetPrefix);
+    conn->open = 0;
+    // enif_release_resource(cmd->conn);
+    
+    void *item = command_create(conn->thread);
+    esqlite_command *cmd = queue_get_item_data(item);
+
+    /* Send the stop command 
+     */
+    cmd->type = cmd_close;
+    cmd->p = conn->db;
+    cmd->ref = 0;
+
+    push_command(conn->thread, item);
 }
 
 static void
@@ -500,6 +506,8 @@ do_open(esqlite_command *cmd, esqlite_thread *thread)
     if(size <= 0) 
         return make_error_tuple(cmd->env, "invalid_filename");
 
+    sqlite3_randomness(sizeof(cmd->conn->randnum), &(cmd->conn->randnum));
+
     /* Open the database. 
      */
     rc = sqlite3_open(filename,&(cmd->conn->db));
@@ -507,8 +515,10 @@ do_open(esqlite_command *cmd, esqlite_thread *thread)
     if(rc != SQLITE_OK) {
         error = make_sqlite3_error_tuple(cmd->env, "sqlite3_open", rc, cmd->conn->db);
         sqlite3_close(cmd->conn->db);
+        cmd->conn->db = NULL;
         return error;
     }
+
     cmd->conn->nPages = cmd->conn->nPrevPages = 0;
     sqlite3_wal_hook(cmd->conn->db,wal_hook,cmd->conn);
     cmd->conn->open = 1;
@@ -808,7 +818,6 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
         if(rc != SQLITE_OK)
         {
             errat = "prepare";
-            rc = SQLITE_ERROR;
             sqlite3_finalize(statement);
             break;
         }
@@ -873,7 +882,8 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
     // }
 
     enif_release_resource(cmd->conn);
-    if (rc == SQLITE_ERROR)
+    // Errors are from 1 to 99.
+    if (rc > 0 && rc < 100)
         return make_sqlite3_error_tuple(cmd->env, errat, rc, cmd->conn->db);
     else if (rc == SQLITE_INTERRUPT)
     {
@@ -1120,13 +1130,12 @@ do_close(esqlite_command *cmd,esqlite_thread *thread)
     }
     else
     {
-        if (cmd->conn != NULL)
-        {
-            if (!cmd->conn->packetPrefix.size)
-                enif_release_binary(&cmd->conn->packetPrefix);
-            cmd->conn->open = 0;
-            enif_release_resource(cmd->conn);
-        }
+        // if (cmd->conn != NULL)
+        // {
+        //     if (cmd->conn->open)
+        //     {
+        //     }
+        // }
         ret = atom_ok;
     }
 
@@ -2025,35 +2034,42 @@ esqlite_column_names(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 static ERL_NIF_TERM
 esqlite_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
-    esqlite_connection *conn;
-    esqlite_command *cmd = NULL;
-    ErlNifPid pid;
+    // Do not do anything on close. Rely on the garbage collector. In manual close there might be a race
+    //  condition that would cause db close to be called twice.
 
-    if(!enif_get_resource(env, argv[0], esqlite_connection_type, (void **) &conn))
-	    return enif_make_badarg(env);
-    if(!enif_is_ref(env, argv[1])) 
-	    return make_error_tuple(env, "invalid_ref");
-    if(!enif_get_local_pid(env, argv[2], &pid)) 
-	    return make_error_tuple(env, "invalid_pid"); 
 
-    void *item = command_create(conn->thread);
-    cmd = queue_get_item_data(item);
-    if(!cmd) 
-        return make_error_tuple(env, "command_create_failed");
 
-    cmd->type = cmd_close;
-    cmd->ref = enif_make_copy(cmd->env, argv[1]);
-    cmd->pid = pid;
-    cmd->conn = conn;
-    cmd->p = conn->db;
-    enif_keep_resource(conn);
+    // esqlite_connection *conn;
+    // esqlite_command *cmd = NULL;
+    // ErlNifPid pid;
 
-    return push_command(conn->thread, item);
+    // if(!enif_get_resource(env, argv[0], esqlite_connection_type, (void **) &conn))
+	   //  return enif_make_badarg(env);
+    // if(!enif_is_ref(env, argv[1])) 
+	   //  return make_error_tuple(env, "invalid_ref");
+    // if(!enif_get_local_pid(env, argv[2], &pid)) 
+	   //  return make_error_tuple(env, "invalid_pid"); 
+
+    // void *item = command_create(conn->thread);
+    // cmd = queue_get_item_data(item);
+    // if(!cmd) 
+    //     return make_error_tuple(env, "command_create_failed");
+
+    // cmd->type = cmd_close;
+    // cmd->ref = enif_make_copy(cmd->env, argv[1]);
+    // cmd->pid = pid;
+    // cmd->conn = conn;
+    // cmd->p = conn->db;
+    // enif_keep_resource(conn);
+
+    // return push_command(conn->thread, item);
+
+    return atom_ok;
 }
 
-// void errLogCallback(void *pArg, int iErrCode, const char *zMsg)
-// {
-// }
+void errLogCallback(void *pArg, int iErrCode, const char *zMsg)
+{
+}
 
 
 /*
@@ -2066,7 +2082,7 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     int i = 0;
 
     sqlite3_initialize();
-    // sqlite3_config(SQLITE_CONFIG_LOG, errLogCallback, NULL);
+    sqlite3_config(SQLITE_CONFIG_LOG, errLogCallback, NULL);
 
     // sqlite3_vfs_register(sqlite3_vfs_find("unix-nolock"), 1);    
 
