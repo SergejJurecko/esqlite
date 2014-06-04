@@ -44,8 +44,10 @@
          lz4_decompress/2,
          lz4_decompress/3,
          tcp_connect/6,
+         tcp_connect/7,
          tcp_reconnect/0,
          replicate_opts/2,
+         replicate_opts/3,
          wal_header/1,
          wal_checksum/4,
          replicate_status/1
@@ -66,7 +68,13 @@ noop(_,_,_) ->
 replicate_opts(_,_) ->
     exit(nif_library_not_loaded).
 
+replicate_opts(_,_,_) ->
+    exit(nif_library_not_loaded).
+
 tcp_connect(_,_,_,_,_,_) ->
+    exit(nif_library_not_loaded).
+
+tcp_connect(_,_,_,_,_,_,_) ->
     exit(nif_library_not_loaded).
 
 tcp_reconnect() ->

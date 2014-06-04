@@ -74,6 +74,7 @@ typedef struct esqlite_control_data esqlite_control_data;
 struct esqlite_control_data {
     char addresses[MAX_CONNECTIONS][255];
     int ports[MAX_CONNECTIONS];
+    int types[MAX_CONNECTIONS];
     // connection prefixes
     ErlNifBinary prefixes[MAX_CONNECTIONS];
     char isopen[MAX_CONNECTIONS];
@@ -90,6 +91,7 @@ struct esqlite_thread {
     esqlite_connection *curConn; 
     // MAX_CONNECTIONS (8) servers to replicate write log to
     int sockets[MAX_CONNECTIONS];
+    int socket_types[MAX_CONNECTIONS];
     esqlite_control_data *control;
 };
 int g_nthreads;
@@ -116,10 +118,9 @@ struct esqlite_connection{
     char nSent;
     // Set bit for every failed attempt to write to socket of connection
     char failFlags;
-    char doReplicate;
-    // only first byte used. Out of 8 possible servers, bit is set for every 
-    // server where data should be replicated to.
-    // int socketFlag;
+    // 0   - do not replicate
+    // > 0 - replicate to socket types that match number
+    int doReplicate;
     // Fixed part of packet prefix
     ErlNifBinary packetPrefix;
     // Variable part of packet prefix
@@ -172,6 +173,7 @@ typedef struct {
     ERL_NIF_TERM arg1;
     ERL_NIF_TERM arg2;
     ERL_NIF_TERM arg3;
+    ERL_NIF_TERM arg4;
     sqlite3_stmt *stmt;
     esqlite_connection *conn;
     void *p;
@@ -313,7 +315,7 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
 
     for (i = 0; i < MAX_CONNECTIONS; i++)
     {
-        if (thread->sockets[i] > 3)
+        if (thread->sockets[i] > 3 && thread->socket_types[i] == conn->doReplicate)
         {
             // sockets are blocking. We presume we are not
             //  network bound thus there should not be a lot of blocking
@@ -430,7 +432,7 @@ command_create(int threadnum)
     }
     cmd->type = cmd_unknown;
     cmd->ref = 0;
-    cmd->arg = cmd->arg1 = cmd->arg2 = cmd->arg3 = 0;
+    cmd->arg = cmd->arg1 = cmd->arg2 = cmd->arg3 = cmd->arg4 = 0;
     cmd->stmt = NULL;
     cmd->conn = NULL;
     cmd->p = NULL;
@@ -647,6 +649,13 @@ do_tcp_connect(esqlite_command *cmd, esqlite_thread *thread)
 
         enif_alloc_binary(bin.size,&(thread->control->prefixes[pos]));
         memcpy(thread->control->prefixes[pos].data,bin.data,bin.size);
+        if (cmd->arg4)
+        {
+            if (!enif_get_int(cmd->env,cmd->arg1,&(thread->control->types[pos])))
+                return enif_make_badarg(cmd->env);
+        }
+        else
+            thread->control->types[pos] = 1;
     }
     else
     {
@@ -723,6 +732,7 @@ do_tcp_connect1(esqlite_command *cmd, esqlite_thread* thread, int pos)
             ncmd->type = cmd_set_socket;
             ncmd->arg = enif_make_int(ncmd->env,sockets[i]);
             ncmd->arg1 = enif_make_int(ncmd->env,pos);
+            ncmd->arg2 = enif_make_int(ncmd->env,thread->control->types[pos]);
             push_command(i, item);
         }
     }
@@ -1190,9 +1200,12 @@ evaluate_command(esqlite_command *cmd,esqlite_thread *thread)
     {
         int fd = 0;
         int pos = -1;
+        int type = 1;
         if (!enif_get_int(cmd->env,cmd->arg,&fd))
             return atom_error;
         if (!enif_get_int(cmd->env,cmd->arg1,&pos))
+            return atom_error;
+        if (!enif_get_int(cmd->env,cmd->arg2,&type))
             return atom_error;
 
         if (fd > 3 && pos >= 0 && pos < 8)
@@ -1212,10 +1225,13 @@ evaluate_command(esqlite_command *cmd,esqlite_thread *thread)
                 {
                     close(fd);
                 }
-                    
             }
             else
+            {
                 thread->sockets[pos] = fd;
+                thread->socket_types[pos] = type;
+            }
+                
             
             return atom_ok;
         }
@@ -1389,7 +1405,7 @@ esqlite_replicate_opts(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     esqlite_connection* conn;
     ErlNifBinary bin;
 
-    if (argc != 2)
+    if (!(argc == 2 || argc == 3))
         return enif_make_badarg(env);
 
     if(!enif_get_resource(env, argv[0], esqlite_connection_type, (void **) &conn))
@@ -1397,10 +1413,14 @@ esqlite_replicate_opts(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
     }
 
-    conn->doReplicate = 1;
+    if (argc == 3)
+    {
+        if (!enif_get_int(env,argv[2],&(conn->doReplicate)))
+            return enif_make_badarg(env);
+    }
+    else
+        conn->doReplicate = 1;
 
-    // if (!enif_get_int(env,argv[1],&(conn->socketFlag)))
-    //     return enif_make_badarg(env);
     if (!conn->packetPrefix.size)
         enif_release_binary(&conn->packetPrefix);
 
@@ -1435,7 +1455,7 @@ tcp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     esqlite_command *cmd = NULL;
     ErlNifPid pid;
 
-    if (argc != 6)
+    if (!(argc == 6 || argc == 7))
         return enif_make_badarg(env);
 
     if(!enif_is_ref(env, argv[0])) 
@@ -1450,16 +1470,20 @@ tcp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
     if (!enif_is_number(env,argv[5]))
         return enif_make_badarg(env);
+    if (argc == 7 && !enif_is_number(env,argv[6]))
+        return enif_make_badarg(env);
 
     void *item = command_create(-1);
     cmd = queue_get_item_data(item);
     if(!cmd)
         return make_error_tuple(env, "command_create_failed");
     cmd->type = cmd_tcp_connect;
-    cmd->arg = argv[2];
-    cmd->arg1 = argv[3];
-    cmd->arg2 = argv[4];
-    cmd->arg3 = argv[5];
+    cmd->arg = enif_make_copy(cmd->env,argv[2]);
+    cmd->arg1 = enif_make_copy(cmd->env,argv[3]);
+    cmd->arg2 = enif_make_copy(cmd->env,argv[4]);
+    cmd->arg3 = enif_make_copy(cmd->env,argv[5]);
+    if (argc == 7)
+        cmd->arg4 = enif_make_copy(cmd->env,argv[6]);
     cmd->ref = enif_make_copy(cmd->env, argv[0]);
     cmd->pid = pid;
 
@@ -2171,6 +2195,7 @@ static ErlNifFunc nif_funcs[] = {
     {"open", 4, esqlite_open},
     {"open", 5, esqlite_open},
     {"replicate_opts",2,esqlite_replicate_opts},
+    {"replicate_opts",3,esqlite_replicate_opts},
     {"replicate_status",1,esqlite_replicate_status},
     {"exec", 4, esqlite_exec},
     {"exec_script", 7, esqlite_exec_script},
@@ -2192,6 +2217,7 @@ static ErlNifFunc nif_funcs[] = {
     {"lz4_decompress",2,esqlite_lz4_decompress},
     {"lz4_decompress",3,esqlite_lz4_decompress},
     {"tcp_connect",6,tcp_connect},
+    {"tcp_connect",7,tcp_connect},
     {"tcp_reconnect",0,tcp_reconnect},
     {"wal_header",1,wal_header},
     {"wal_checksum",4,wal_checksum}
