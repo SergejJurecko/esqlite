@@ -315,7 +315,7 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
 
     for (i = 0; i < MAX_CONNECTIONS; i++)
     {
-        if (thread->sockets[i] > 3 && thread->socket_types[i] == conn->doReplicate)
+        if (thread->sockets[i] > 3 && thread->socket_types[i] <= conn->doReplicate)
         {
             // sockets are blocking. We presume we are not
             //  network bound thus there should not be a lot of blocking
@@ -651,7 +651,7 @@ do_tcp_connect(esqlite_command *cmd, esqlite_thread *thread)
         memcpy(thread->control->prefixes[pos].data,bin.data,bin.size);
         if (cmd->arg4)
         {
-            if (!enif_get_int(cmd->env,cmd->arg1,&(thread->control->types[pos])))
+            if (!enif_get_int(cmd->env,cmd->arg4,&(thread->control->types[pos])))
                 return enif_make_badarg(cmd->env);
         }
         else
