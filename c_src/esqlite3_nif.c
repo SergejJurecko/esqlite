@@ -608,7 +608,7 @@ do_tcp_reconnect(esqlite_command *cmd, esqlite_thread *thread)
     for (i = 0; i < MAX_CONNECTIONS; i++)
     {
         // address set and not open
-        if (!thread->control->addresses[i][0] && !thread->control->isopen)
+        if (thread->control->addresses[i][0] && !thread->control->isopen[i])
         {
             do_tcp_connect1(cmd,thread, i);
         }
@@ -621,7 +621,6 @@ do_tcp_connect(esqlite_command *cmd, esqlite_thread *thread)
 {
     int pos;
     ErlNifBinary bin;
-    
 
     if (!thread->control)
     {
@@ -721,6 +720,7 @@ do_tcp_connect1(esqlite_command *cmd, esqlite_thread* thread, int pos)
 
         sockets[i] = fd;
     }
+
     if (result == atom_ok)
     {
         thread->control->isopen[pos] = 1;
@@ -747,7 +747,6 @@ do_tcp_connect1(esqlite_command *cmd, esqlite_thread* thread, int pos)
         }
     }
     enif_free(sockets);
-
 
     return result;
 }
@@ -1207,7 +1206,7 @@ evaluate_command(esqlite_command *cmd,esqlite_thread *thread)
             return atom_error;
         if (!enif_get_int(cmd->env,cmd->arg2,&type))
             return atom_error;
-
+        
         if (fd > 3 && pos >= 0 && pos < 8)
         {
             if (thread->sockets[pos] > 3)
@@ -1231,8 +1230,6 @@ evaluate_command(esqlite_command *cmd,esqlite_thread *thread)
                 thread->sockets[pos] = fd;
                 thread->socket_types[pos] = type;
             }
-                
-            
             return atom_ok;
         }
         return atom_error;
