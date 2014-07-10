@@ -448,11 +448,12 @@ static void
 destruct_esqlite_connection(ErlNifEnv *env, void *arg)
 {
     esqlite_connection *conn = (esqlite_connection *) arg;
-    if (!conn->open)
-        return;
 
     if (!conn->packetPrefix.size)
         enif_release_binary(&conn->packetPrefix);
+
+    if (!conn->open)
+        return;
     conn->open = 0;
     // enif_release_resource(cmd->conn);
     
@@ -1135,16 +1136,14 @@ do_close(esqlite_command *cmd,esqlite_thread *thread)
 
     if(rc != SQLITE_OK)
     {
-        ret = make_sqlite3_error_tuple(cmd->env,"sqlite3_close in do_close",rc,db);
+        ret = make_sqlite3_error_tuple(cmd->env,"sqlite3_close in do_close");
     }
     else
     {
-        // if (cmd->conn != NULL)
-        // {
-        //     if (cmd->conn->open)
-        //     {
-        //     }
-        // }
+        if (cmd->conn != NULL)
+        {
+            cmd->conn->open = 0;
+        }
         ret = atom_ok;
     }
 
@@ -2055,37 +2054,32 @@ esqlite_column_names(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 static ERL_NIF_TERM
 esqlite_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
-    // Do not do anything on close. Rely on the garbage collector. In manual close there might be a race
-    //  condition that would cause db close to be called twice.
+    esqlite_connection *conn;
+    esqlite_command *cmd = NULL;
+    ErlNifPid pid;
 
+    if(!enif_get_resource(env, argv[0], esqlite_connection_type, (void **) &conn))
+	    return enif_make_badarg(env);
+    if(!enif_is_ref(env, argv[1])) 
+	    return make_error_tuple(env, "invalid_ref");
+    if(!enif_get_local_pid(env, argv[2], &pid)) 
+	    return make_error_tuple(env, "invalid_pid"); 
 
+    void *item = command_create(conn->thread);
+    cmd = queue_get_item_data(item);
+    if(!cmd) 
+        return make_error_tuple(env, "command_create_failed");
 
-    // esqlite_connection *conn;
-    // esqlite_command *cmd = NULL;
-    // ErlNifPid pid;
+    cmd->type = cmd_close;
+    cmd->ref = enif_make_copy(cmd->env, argv[1]);
+    cmd->pid = pid;
+    cmd->conn = conn;
+    cmd->p = conn->db;
+    enif_keep_resource(conn);
 
-    // if(!enif_get_resource(env, argv[0], esqlite_connection_type, (void **) &conn))
-	   //  return enif_make_badarg(env);
-    // if(!enif_is_ref(env, argv[1])) 
-	   //  return make_error_tuple(env, "invalid_ref");
-    // if(!enif_get_local_pid(env, argv[2], &pid)) 
-	   //  return make_error_tuple(env, "invalid_pid"); 
+    return push_command(conn->thread, item);
 
-    // void *item = command_create(conn->thread);
-    // cmd = queue_get_item_data(item);
-    // if(!cmd) 
-    //     return make_error_tuple(env, "command_create_failed");
-
-    // cmd->type = cmd_close;
-    // cmd->ref = enif_make_copy(cmd->env, argv[1]);
-    // cmd->pid = pid;
-    // cmd->conn = conn;
-    // cmd->p = conn->db;
-    // enif_keep_resource(conn);
-
-    // return push_command(conn->thread, item);
-
-    return atom_ok;
+    // return atom_ok;
 }
 
 void errLogCallback(void *pArg, int iErrCode, const char *zMsg)
