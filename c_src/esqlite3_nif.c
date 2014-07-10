@@ -1347,6 +1347,8 @@ parse_helper(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         }
     }
 
+    enif_consume_timeslice(env,5);
+
     return atom_ok;
 }
 
@@ -1393,6 +1395,7 @@ esqlite_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         cmd->arg1 = 0;
     cmd->conn = conn;
     db_conn = enif_make_resource(env, conn);
+    enif_consume_timeslice(env,90);
     return enif_make_tuple2(env,push_command(conn->thread, item),db_conn);
 }
 
@@ -1427,6 +1430,7 @@ esqlite_replicate_opts(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     enif_alloc_binary(bin.size,&(conn->packetPrefix));
     memcpy(conn->packetPrefix.data,bin.data,bin.size);
 
+    enif_consume_timeslice(env,10);
     return atom_ok;
 }
 
@@ -1443,6 +1447,7 @@ esqlite_replicate_status(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
     }
     
+    enif_consume_timeslice(env,10);
     return enif_make_tuple2(env,enif_make_int(env,conn->nSent),enif_make_int(env,conn->failFlags));
 }
 // Called with: ref,pid, ip, port, connect string, connection number
@@ -1484,6 +1489,7 @@ tcp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     cmd->ref = enif_make_copy(cmd->env, argv[0]);
     cmd->pid = pid;
 
+    enif_consume_timeslice(env,50);
     return push_command(-1,item);
 }
 
@@ -1497,6 +1503,8 @@ tcp_reconnect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if(!cmd)
         return make_error_tuple(env, "command_create_failed");
     cmd->type = cmd_tcp_reconnect;
+
+    enif_consume_timeslice(env,50);
 
     return push_command(-1,item);
 }
@@ -1528,6 +1536,7 @@ wal_header(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     sqlite3Put4byte(&binOut.data[24], aCksum[0]);
     sqlite3Put4byte(&binOut.data[28], aCksum[1]);
 
+    enif_consume_timeslice(env,10);
     return enif_make_binary(env,&binOut);
 }
 
@@ -1557,6 +1566,8 @@ wal_checksum(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     walChecksumBytes(1, bin.data, size, aCksum, aCksum);
 
+    enif_consume_timeslice(env,30);
+
     return enif_make_tuple2(env,enif_make_uint(env,aCksum[0]),enif_make_uint(env,aCksum[1]));
 }
 
@@ -1581,6 +1592,8 @@ esqlite_interrupt_query(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     cmd->ref = 0;
     cmd->conn = conn;
     enif_keep_resource(conn);
+
+    enif_consume_timeslice(env,80);
 
     return push_command(-1, item);
 }
@@ -1629,6 +1642,8 @@ esqlite_backup_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     cmd->arg = enif_make_copy(cmd->env, argv[3]);
     cmd->p = backup;
 
+    enif_consume_timeslice(env,90);
+
     return push_command(backup->thread, item);
 }
 
@@ -1664,6 +1679,8 @@ esqlite_backup_finish(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     enif_keep_resource(backup);
 
+    enif_consume_timeslice(env,90);
+
     return push_command(backup->thread, item);
 }
 
@@ -1680,6 +1697,7 @@ esqlite_backup_pages(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
     }
 
+    enif_consume_timeslice(env,10);
     return enif_make_tuple2(env, enif_make_int(env,sqlite3_backup_pagecount(backup->b)),
                                  enif_make_int(env,sqlite3_backup_remaining(backup->b)));
 }
@@ -1718,6 +1736,8 @@ esqlite_backup_step(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     enif_keep_resource(backup);
 
+    enif_consume_timeslice(env,80);
+
     return push_command(backup->thread, item);
 }
 
@@ -1738,6 +1758,8 @@ esqlite_lz4_compress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     int size = LZ4_compress((char*)binIn.data,(char*)binOut.data,binIn.size);
     ERL_NIF_TERM termbin = enif_make_binary(env,&binOut);
     enif_release_binary(&binOut);
+
+    enif_consume_timeslice(env,80);
     return enif_make_tuple2(env,termbin,enif_make_int(env,size));
 }
 
@@ -1768,6 +1790,7 @@ esqlite_lz4_decompress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     enif_alloc_binary(sizeOriginal,&binOut);
     int rt = LZ4_decompress_safe((char*)binIn.data,(char*)binOut.data,sizeReadNum,sizeOriginal);
+    enif_consume_timeslice(env,80);
     if (rt > 0)
     {
         ERL_NIF_TERM termout = enif_make_binary(env,&binOut);
@@ -1881,6 +1904,8 @@ esqlite_exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     cmd->arg3 = enif_make_copy(cmd->env, argv[6]); // appendentries param binary
     cmd->conn = db;
     enif_keep_resource(db);
+
+    enif_consume_timeslice(env,80);
 
     return push_command(db->thread, item);
 }
