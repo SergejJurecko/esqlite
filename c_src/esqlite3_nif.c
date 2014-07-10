@@ -2102,6 +2102,7 @@ esqlite_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     cmd->p = conn->db;
     enif_keep_resource(conn);
 
+    enif_consume_timeslice(env,60);
     return push_command(conn->thread, item);
 
     // return atom_ok;
