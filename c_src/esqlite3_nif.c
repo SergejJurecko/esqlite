@@ -1136,7 +1136,7 @@ do_close(esqlite_command *cmd,esqlite_thread *thread)
 
     if(rc != SQLITE_OK)
     {
-        ret = make_sqlite3_error_tuple(cmd->env,"sqlite3_close in do_close");
+        ret = make_error_tuple(cmd->env,"sqlite3_close in do_close");
     }
     else
     {
