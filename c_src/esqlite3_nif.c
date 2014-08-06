@@ -396,8 +396,14 @@ make_sqlite3_error_tuple(ErlNifEnv *env,const char* calledfrom, int error_code, 
     const char *error_code_msg = get_sqlite3_return_code_msg(error_code);
     const char *msg = get_sqlite3_error_msg(error_code, db);
     
-    return enif_make_tuple2(env, atom_error, 
-        enif_make_tuple3(env, enif_make_string(env,calledfrom,ERL_NIF_LATIN1),
+    if (calledfrom == NULL)
+        return enif_make_tuple2(env, atom_error, 
+            enif_make_tuple3(env, enif_make_string(env,"",ERL_NIF_LATIN1),
+                              make_atom(env, error_code_msg), 
+                              enif_make_string(env, msg, ERL_NIF_LATIN1)));
+    else
+        return enif_make_tuple2(env, atom_error, 
+            enif_make_tuple3(env, enif_make_string(env,calledfrom,ERL_NIF_LATIN1),
                               make_atom(env, error_code_msg), 
                               enif_make_string(env, msg, ERL_NIF_LATIN1)));
 }
