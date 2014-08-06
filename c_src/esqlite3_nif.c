@@ -198,6 +198,7 @@ void write16bit(char *p, int v);
 void wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize);
 void *command_create(int threadnum);
 static ERL_NIF_TERM do_tcp_connect1(esqlite_command *cmd, esqlite_thread* thread, int pos);
+static int bind_cell(ErlNifEnv *env, const ERL_NIF_TERM cell, sqlite3_stmt *stmt, unsigned int i);
 
 static ERL_NIF_TERM 
 make_atom(ErlNifEnv *env, const char *atom_name) 
@@ -785,6 +786,7 @@ do_bind_insert(esqlite_command *cmd, esqlite_thread *thread)
     sqlite3_stmt *statement = NULL;
     int rc = 0;
     ERL_NIF_TERM res;
+    int i = 0;
 
     list = cmd->arg1;
 
@@ -795,7 +797,7 @@ do_bind_insert(esqlite_command *cmd, esqlite_thread *thread)
 
     while (enif_get_list_cell(cmd->env, list, &rowlist, &list))
     {
-        while (enif_get_list_cell(cmd->env, rowlist, &rowhead, &rowlist))
+        for (i = 0; enif_get_list_cell(cmd->env, rowlist, &rowhead, &rowlist); i++)
         {
             if (bind_cell(cmd->env, rowhead, &statement, i+1) == -1)
             {
