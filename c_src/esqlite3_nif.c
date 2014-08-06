@@ -786,7 +786,7 @@ do_bind_insert(esqlite_command *cmd, esqlite_thread *thread)
     ErlNifBinary bin;
     sqlite3_stmt *statement = NULL;
     int rc = 0;
-    // ERL_NIF_TERM res;
+    ERL_NIF_TERM result;
     int i = 0,insertCounter = 0;
 
     list = cmd->arg1;
@@ -798,7 +798,7 @@ do_bind_insert(esqlite_command *cmd, esqlite_thread *thread)
     if(rc != SQLITE_OK)
     {
         sqlite3_finalize(statement);
-        return enif_make_int(cmd->env,rc);   
+        return make_sqlite3_error_tuple(cmd->env, NULL, rc, cmd->conn->db);
     }
 
     for (insertCounter = 0; enif_get_list_cell(cmd->env, list, &rowlist, &list); insertCounter++)
@@ -822,7 +822,12 @@ do_bind_insert(esqlite_command *cmd, esqlite_thread *thread)
     enif_release_resource(cmd->conn);
 
     if (rc == SQLITE_DONE)
-        return enif_make_tuple2(cmd->env,atom_ok,enif_make_int(cmd->env,insertCounter));
+    {
+        result = enif_make_list1(cmd->env, enif_make_tuple3(cmd->env,atom_changes,
+                                             enif_make_int64(cmd->env,sqlite3_last_insert_rowid(cmd->conn->db)), 
+                                            enif_make_int(cmd->env,sqlite3_changes(cmd->conn->db))));
+        return enif_make_tuple2(cmd->env,atom_ok,result);
+    }
     else
         return atom_false;
 }
