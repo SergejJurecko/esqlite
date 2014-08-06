@@ -50,8 +50,12 @@
          replicate_opts/3,
          wal_header/1,
          wal_checksum/4,
-         replicate_status/1
+         replicate_status/1,
+         bind_insert/5
 ]).
+
+bind_insert(_,_,_,_,_) ->
+    exit(nif_library_not_loaded).
 
 wal_checksum(_,_,_,_) ->
     exit(nif_library_not_loaded).

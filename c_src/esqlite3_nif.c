@@ -199,6 +199,7 @@ void wal_page_hook(void *data,void *page,int pagesize,void* header, int headersi
 void *command_create(int threadnum);
 static ERL_NIF_TERM do_tcp_connect1(esqlite_command *cmd, esqlite_thread* thread, int pos);
 static int bind_cell(ErlNifEnv *env, const ERL_NIF_TERM cell, sqlite3_stmt *stmt, unsigned int i);
+void errLogCallback(void *pArg, int iErrCode, const char *zMsg);
 
 static ERL_NIF_TERM 
 make_atom(ErlNifEnv *env, const char *atom_name) 
@@ -785,8 +786,8 @@ do_bind_insert(esqlite_command *cmd, esqlite_thread *thread)
     ErlNifBinary bin;
     sqlite3_stmt *statement = NULL;
     int rc = 0;
-    ERL_NIF_TERM res;
-    int i = 0;
+    // ERL_NIF_TERM res;
+    int i = 0,insertCounter = 0;
 
     list = cmd->arg1;
 
@@ -794,21 +795,36 @@ do_bind_insert(esqlite_command *cmd, esqlite_thread *thread)
         return make_error_tuple(cmd->env, "not iolist");
 
     rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(bin.data), bin.size, &(statement), NULL);
+    if(rc != SQLITE_OK)
+    {
+        sqlite3_finalize(statement);
+        return enif_make_int(cmd->env,rc);   
+    }
 
-    while (enif_get_list_cell(cmd->env, list, &rowlist, &list))
+    for (insertCounter = 0; enif_get_list_cell(cmd->env, list, &rowlist, &list); insertCounter++)
     {
         for (i = 0; enif_get_list_cell(cmd->env, rowlist, &rowhead, &rowlist); i++)
         {
-            if (bind_cell(cmd->env, rowhead, &statement, i+1) == -1)
+            if (bind_cell(cmd->env, rowhead, statement, i+1) == -1)
             {
                 list = enif_make_list(cmd->env,0);
                 break;
             }
-                
         }
+        rc = sqlite3_step(statement);
+        if (rc != SQLITE_DONE)
+        {
+            break;
+        }
+        sqlite3_reset(statement);
     }
+    sqlite3_finalize(statement);
+    enif_release_resource(cmd->conn);
 
-    return atom_ok;
+    if (rc == SQLITE_DONE)
+        return enif_make_tuple2(cmd->env,atom_ok,enif_make_int(cmd->env,insertCounter));
+    else
+        return atom_false;
 }
 
 /* 
@@ -987,7 +1003,7 @@ bind_cell(ErlNifEnv *env, const ERL_NIF_TERM cell, sqlite3_stmt *stmt, unsigned 
     int arity;
     const ERL_NIF_TERM* tuple;
 
-    if(enif_get_int(env, cell, &the_int)) 
+    if(enif_get_int(env, cell, &the_int))
         return sqlite3_bind_int(stmt, i, the_int);
 
     if(enif_get_int64(env, cell, &the_long_int)) 
@@ -1962,7 +1978,7 @@ esqlite_bind_insert(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     esqlite_command *cmd = NULL;
     ErlNifPid pid;
 
-    if(argc != 4) 
+    if(argc != 5) 
         return enif_make_badarg(env);  
 
     if(!enif_get_resource(env, argv[0], esqlite_connection_type, (void **) &db))
