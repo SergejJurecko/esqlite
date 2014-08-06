@@ -160,7 +160,8 @@ typedef enum {
     cmd_interrupt,
     cmd_tcp_connect,
     cmd_set_socket,
-    cmd_tcp_reconnect
+    cmd_tcp_reconnect,
+    cmd_bind_insert
 } command_type;
 
 typedef struct {
@@ -776,6 +777,38 @@ do_exec(esqlite_command *cmd, esqlite_thread *thread)
     return atom_ok;
 }
 
+static ERL_NIF_TERM
+do_bind_insert(esqlite_command *cmd, esqlite_thread *thread)
+{
+    ERL_NIF_TERM list, rowhead, rowlist;
+    ErlNifBinary bin;
+    sqlite3_stmt *statement = NULL;
+    int rc = 0;
+    ERL_NIF_TERM res;
+
+    list = cmd->arg1;
+
+    if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin))
+        return make_error_tuple(cmd->env, "not iolist");
+
+    rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(bin.data), bin.size, &(statement), NULL);
+
+    while (enif_get_list_cell(cmd->env, list, &rowlist, &list))
+    {
+        while (enif_get_list_cell(cmd->env, rowlist, &rowhead, &rowlist))
+        {
+            if (bind_cell(cmd->env, rowhead, &statement, i+1) == -1)
+            {
+                list = enif_make_list(cmd->env,0);
+                break;
+            }
+                
+        }
+    }
+
+    return atom_ok;
+}
+
 /* 
  */
 static ERL_NIF_TERM
@@ -994,6 +1027,8 @@ bind_cell(ErlNifEnv *env, const ERL_NIF_TERM cell, sqlite3_stmt *stmt, unsigned 
     return -1;
 }
 
+
+
 static ERL_NIF_TERM
 do_bind(esqlite_command *cmd, esqlite_thread *thread)
 {
@@ -1200,6 +1235,8 @@ evaluate_command(esqlite_command *cmd,esqlite_thread *thread)
         return do_tcp_connect(cmd,thread);
     case cmd_tcp_reconnect:
         return do_tcp_reconnect(cmd,thread);
+    case cmd_bind_insert:
+        return do_bind_insert(cmd,thread);
     case cmd_set_socket:
     {
         int fd = 0;
@@ -1916,6 +1953,47 @@ esqlite_exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 }
 
 
+static ERL_NIF_TERM 
+esqlite_bind_insert(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    esqlite_connection *db;
+    esqlite_command *cmd = NULL;
+    ErlNifPid pid;
+
+    if(argc != 4) 
+        return enif_make_badarg(env);  
+
+    if(!enif_get_resource(env, argv[0], esqlite_connection_type, (void **) &db))
+        return enif_make_badarg(env);
+        
+    if(!enif_is_ref(env, argv[1])) 
+        return make_error_tuple(env, "invalid_ref");
+    if(!enif_get_local_pid(env, argv[2], &pid)) 
+        return make_error_tuple(env, "invalid_pid"); 
+    if (!(enif_is_binary(env,argv[3]) || enif_is_list(env,argv[3])))
+        return make_error_tuple(env,"invalid sql");
+    if (!(enif_is_list(env,argv[4])))
+        return make_error_tuple(env,"invalid bind parameters");
+
+    void *item = command_create(db->thread);
+    cmd = queue_get_item_data(item);
+    if(!cmd) 
+        return make_error_tuple(env, "command_create_failed");
+     
+    /* command */
+    cmd->type = cmd_bind_insert;
+    cmd->ref = enif_make_copy(cmd->env, argv[1]);
+    cmd->pid = pid;
+    cmd->arg = enif_make_copy(cmd->env, argv[3]);  // sql string
+    cmd->arg1 = enif_make_copy(cmd->env, argv[4]); // bind list
+    cmd->conn = db;
+    enif_keep_resource(db);
+
+    enif_consume_timeslice(env,80);
+
+    return push_command(db->thread, item);
+}
+
 /*
  * Prepare the sql statement
  */
@@ -2222,10 +2300,10 @@ static ErlNifFunc nif_funcs[] = {
     {"replicate_status",1,esqlite_replicate_status},
     {"exec", 4, esqlite_exec},
     {"exec_script", 7, esqlite_exec_script},
+    {"bind_insert",5,esqlite_bind_insert},
     {"prepare", 4, esqlite_prepare},
     {"step", 3, esqlite_step},
     {"noop", 3, esqlite_noop},
-    // TODO: {"esqlite_bind", 3, esqlite_bind_named},
     {"bind", 4, esqlite_bind},
     {"parse_helper",2,parse_helper},
     {"column_names", 3, esqlite_column_names},
