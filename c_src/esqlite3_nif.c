@@ -921,7 +921,7 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
                 {
                     strncpy(tableName,rowName,20);
                     insertStatementLen = 0;
-                    insertStatementLen += snprintf(insertStatement,1024,"insert into %s values(",tableName);
+                    insertStatementLen += snprintf(insertStatement,1024,"insert or replace into %s values(",tableName);
                     for (i = 1; i < rowLen && insertStatementLen < 1000; i++)
                     {
                         if (i+1 < rowLen)
