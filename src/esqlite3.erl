@@ -24,7 +24,7 @@
 -export([init/1,noop/1,
          open/1,open/2,open/3,
          exec/2,
-         exec_script/2,exec_script/3,exec_script/6,
+         exec_script/2,exec_script/3,exec_script/6,exec_script/4,exec_script/7,
          prepare/2, 
          step/1, 
          bind/2, 
@@ -275,11 +275,19 @@ bind_insert(Sql, [[_|_]|_] = Params, {connection, _Ref, Connection}) ->
 %% @spec exec(iolist(), connection()) -> integer() |  {error, error_message()}
 exec_script(Sql, Db) ->
     exec_script(Sql,Db,infinity,0,0,<<>>).
-exec_script(Sql, Db,Timeout) ->
+exec_script(Sql,[_|_] = Recs, Db) ->
+    exec_script(Sql,Recs,Db,infinity,0,0,<<>>);
+exec_script(Sql, Db, Timeout) when is_integer(Timeout) ->
     exec_script(Sql,Db,Timeout,0,0,<<>>).
+exec_script(Sql, [_|_] = Recs, Db, Timeout) when is_integer(Timeout) ->
+    exec_script(Sql,Recs,Db,Timeout,0,0,<<>>).
 exec_script(Sql,  {connection, _Ref, Connection},Timeout,Term,Index,AppendParam) ->
     Ref = make_ref(),
     ok = esqlite3_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam),
+    receive_answer(Ref,Connection,Timeout).
+exec_script(Sql, [_|_] = Recs, {connection, _Ref, Connection},Timeout,Term,Index,AppendParam) ->
+    Ref = make_ref(),
+    ok = esqlite3_nif:exec_script(Connection, Ref, self(), Sql,Term,Index,AppendParam,Recs),
     receive_answer(Ref,Connection,Timeout).
 
 backup_init({connection, _, Dest},{connection, _, Src}) ->

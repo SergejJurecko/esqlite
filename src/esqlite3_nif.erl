@@ -26,6 +26,7 @@
          open/5,
          exec/4, 
          exec_script/7, 
+         exec_script/8,
          prepare/4,
          step/3,
          finalize/3,
@@ -168,6 +169,9 @@ exec(_Db, _Ref, _Dest, _Sql) ->
 %%
 %%  @spec exec(connection(), Ref::reference(), Dest::pid(), string(),integer(),integer(),binary()) -> ok | {error, message()}
 exec_script(_Db, _Ref, _Dest, _Sql,_Term,_Index,_AParam) ->
+    exit(nif_library_not_loaded).
+
+exec_script(_Db, _Ref, _Dest, _Sql,_Term,_Index,_AParam,_RecordInsert) ->
     exit(nif_library_not_loaded).
 
 %% @doc

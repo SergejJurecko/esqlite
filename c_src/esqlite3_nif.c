@@ -847,10 +847,17 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
     ERL_NIF_TERM *array;
     ERL_NIF_TERM column_names;
     ERL_NIF_TERM results;
-    char skip = 0;
+    ERL_NIF_TERM list, head;
+    int skip = 0;
     int statementlen = 0;
     ERL_NIF_TERM rows;
     char *errat = NULL;
+    
+    const ERL_NIF_TERM *insertRow;
+    char tableName[20] = {0}, rowName[20] = {0};
+    char insertStatement[1024] = {0};
+    int insertStatementLen = 0;
+    int rowLen = 0;
     // char pagesBuff[4];
     // int nPages = cmd->conn->nPages;
 
@@ -880,45 +887,118 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
     while (readpoint < end)
     {
         if (readpoint[0] == '$')
-        {
             skip = 1;
-        }
         else
             skip = 0;
-        statementlen = end-readpoint;
-        rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, &(statement), &readpoint);
-        if(rc != SQLITE_OK)
+        statementlen = end-readpoint-skip;
+        
+        if (statementlen >= 8 && cmd->arg4 && readpoint[skip] == '_' && readpoint[skip+1] == 'i' && readpoint[skip+2] == 'n' &&
+                // readpoint[3] == 's' && readpoint[4] == 'e' && readpoint[5] == 'r' && readpoint[6] == 't'
+                readpoint[skip+7] == ';')
         {
-            errat = "prepare";
-            sqlite3_finalize(statement);
-            break;
-        }
-         
-        column_count = sqlite3_column_count(statement);
-        array = (ERL_NIF_TERM *)malloc(sizeof(ERL_NIF_TERM) * column_count);
+            list = cmd->arg4;
+            rc = SQLITE_DONE;
 
-        for(i = 0; i < column_count; i++) 
+            // Move over a list of records.
+            // Record name means name of table.
+            // There can be multiple different types of records, 
+            // but they should be grouped together.
+            while (rc == SQLITE_DONE && enif_get_list_cell(cmd->env, list, &head, &list))
+            {
+                if (!enif_get_tuple(cmd->env, head, &rowLen, &insertRow) && rowLen > 1 && rowLen < 100)
+                {
+                    errat = "not_tuple";
+                    rc = SQLITE_INTERRUPT;
+                    break;
+                }
+                if (!enif_get_atom(cmd->env,insertRow[0],rowName,20,ERL_NIF_LATIN1))
+                {
+                    errat = "missing_tablename";
+                    rc = SQLITE_INTERRUPT;
+                    break;
+                }
+                if (statement == NULL || strncmp(tableName,rowName,20) != 0)
+                {
+                    strncpy(tableName,rowName,20);
+                    insertStatementLen = 0;
+                    insertStatementLen += snprintf(insertStatement,1024,"insert into %s values(",tableName);
+                    for (i = 1; i < rowLen && insertStatementLen < 1000; i++)
+                    {
+                        if (i+1 < rowLen)
+                            insertStatementLen += snprintf(insertStatement+insertStatementLen,1024-insertStatementLen,
+                                "?%d,",i);
+                        else
+                            insertStatementLen += snprintf(insertStatement+insertStatementLen,1024-insertStatementLen,
+                                "?%d",i);
+                    }
+                    strcat(insertStatement,");");
+                    rc = sqlite3_prepare_v2(cmd->conn->db, insertStatement, strlen(insertStatement), &statement, NULL);
+                    if(rc != SQLITE_OK)
+                    {
+                        errat = "prepare";
+                        sqlite3_finalize(statement);
+                        break;
+                    }
+                    rc = SQLITE_DONE;
+                }
+
+                for (i = 1; i < rowLen; i++)
+                {
+                    if (bind_cell(cmd->env, insertRow[i], statement, i) == -1)
+                    {
+                        rc = SQLITE_INTERRUPT;
+                        errat = "cant_bind";
+                        sqlite3_finalize(statement);
+                        break;                        
+                    }
+                }
+                rc = sqlite3_step(statement);
+                sqlite3_reset(statement);
+            }
+            
+            readpoint += skip+statementlen;
+        }
+        else
         {
-            const char* cname = sqlite3_column_name(statement, i);
-            array[i] = make_binary(cmd->env, cname,strlen(cname));
+            rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, &(statement), &readpoint);
+            if(rc != SQLITE_OK)
+            {
+                errat = "prepare";
+                sqlite3_finalize(statement);
+                break;
+            }
+             
+            column_count = sqlite3_column_count(statement);
+            if (column_count > 0)
+            {
+                array = (ERL_NIF_TERM *)malloc(sizeof(ERL_NIF_TERM) * column_count);
+
+                for(i = 0; i < column_count; i++) 
+                {
+                    const char* cname = sqlite3_column_name(statement, i);
+                    array[i] = make_binary(cmd->env, cname,strlen(cname));
+                }
+
+                column_names = enif_make_tuple_from_array(cmd->env, array, column_count);
+                free(array);
+            }
+            
+                    
+            rows = enif_make_list(cmd->env,0);
+            rowcount = 0;
+            while ((rc = sqlite3_step(statement)) == SQLITE_ROW)
+            {
+                ERL_NIF_TERM *array = (ERL_NIF_TERM*)malloc(sizeof(ERL_NIF_TERM)*column_count);
+
+                for(i = 0; i < column_count; i++) 
+                    array[i] = make_cell(cmd->env, statement, i);
+
+                rows = enif_make_list_cell(cmd->env, enif_make_tuple_from_array(cmd->env, array, column_count), rows);
+                free(array);
+                rowcount++;
+            }
         }
 
-        column_names = enif_make_tuple_from_array(cmd->env, array, column_count);
-        free(array);
-                
-        rows = enif_make_list(cmd->env,0);
-        rowcount = 0;
-        while ((rc = sqlite3_step(statement)) == SQLITE_ROW)
-        {
-            ERL_NIF_TERM *array = (ERL_NIF_TERM*)malloc(sizeof(ERL_NIF_TERM)*column_count);
-
-            for(i = 0; i < column_count; i++) 
-                array[i] = make_cell(cmd->env, statement, i);
-
-            rows = enif_make_list_cell(cmd->env, enif_make_tuple_from_array(cmd->env, array, column_count), rows);
-            free(array);
-            rowcount++;
-        }
 
         if (rc == SQLITE_ERROR || rc == SQLITE_INTERRUPT)
         {
@@ -939,6 +1019,7 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
                                             results);
         }
         sqlite3_finalize(statement);
+        statement = NULL;
     }
 
     // has number of pages changed
@@ -955,7 +1036,7 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
 
     enif_release_resource(cmd->conn);
     // Errors are from 1 to 99.
-    if (rc > 0 && rc < 100)
+    if (rc > 0 && rc < 100 && rc != SQLITE_INTERRUPT)
         return make_sqlite3_error_tuple(cmd->env, errat, rc, cmd->conn->db);
     else if (rc == SQLITE_INTERRUPT)
     {
@@ -1935,7 +2016,7 @@ esqlite_exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     esqlite_command *cmd = NULL;
     ErlNifPid pid;
      
-    if(argc != 7) 
+    if(argc != 7 && argc != 8) 
         return enif_make_badarg(env);  
     if(!enif_get_resource(env, argv[0], esqlite_connection_type, (void **) &db))
         return enif_make_badarg(env);
@@ -1951,7 +2032,7 @@ esqlite_exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if (!enif_is_number(env,argv[5]))
         return make_error_tuple(env, "index not number"); 
     if (!enif_is_binary(env,argv[6]))
-        return make_error_tuple(env, "appendparam not binary"); 
+        return make_error_tuple(env, "appendparam not binary");    
 
     
     void *item = command_create(db->thread);
@@ -1967,6 +2048,8 @@ esqlite_exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     cmd->arg1 = enif_make_copy(cmd->env, argv[4]); // term
     cmd->arg2 = enif_make_copy(cmd->env, argv[5]); // index
     cmd->arg3 = enif_make_copy(cmd->env, argv[6]); // appendentries param binary
+    if (argc == 8)
+        cmd->arg4 = enif_make_copy(cmd->env, argv[7]);  // records for bulk insert
     cmd->conn = db;
     enif_keep_resource(db);
 
@@ -2323,6 +2406,7 @@ static ErlNifFunc nif_funcs[] = {
     {"replicate_status",1,esqlite_replicate_status},
     {"exec", 4, esqlite_exec},
     {"exec_script", 7, esqlite_exec_script},
+    {"exec_script", 8, esqlite_exec_script},
     {"bind_insert",5,esqlite_bind_insert},
     {"prepare", 4, esqlite_prepare},
     {"step", 3, esqlite_step},
