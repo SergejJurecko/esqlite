@@ -888,7 +888,7 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
             skip = 1;
         else
             skip = 0;
-        statementlen = end-readpoint-skip;
+        statementlen = end-readpoint;
         
         // if _insert, then this is a prepared statement with multiple rows in arg4
         if (statementlen >= 8 && cmd->arg4 && readpoint[skip] == '_' && (readpoint[skip+1] == 'i' || readpoint[skip+1] == 'I') &&
