@@ -934,8 +934,6 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
                 rc = sqlite3_step(statement);
                 sqlite3_reset(statement);
             }
-            
-            readpoint += skip+statementlen;
         }
         else
         {
