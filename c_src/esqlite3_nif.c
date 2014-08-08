@@ -847,19 +847,17 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
     ERL_NIF_TERM *array;
     ERL_NIF_TERM column_names;
     ERL_NIF_TERM results;
-    ERL_NIF_TERM list, head;
+    // insert records are a list of lists.
+    ERL_NIF_TERM listTop, headTop,headBot;
     int skip = 0;
     int statementlen = 0;
     ERL_NIF_TERM rows;
     char *errat = NULL;
     
     const ERL_NIF_TERM *insertRow;
-    char tableName[20] = {0}, rowName[20] = {0};
-    char insertStatement[1024] = {0};
-    int insertStatementLen = 0;
     int rowLen = 0;
-    // char pagesBuff[4];
-    // int nPages = cmd->conn->nPages;
+    listTop = cmd->arg4;
+
 
     if (!cmd->conn->wal_configured)
         cmd->conn->wal_configured = SQLITE_OK == 
@@ -892,61 +890,42 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
             skip = 0;
         statementlen = end-readpoint-skip;
         
-        if (statementlen >= 8 && cmd->arg4 && readpoint[skip] == '_' && readpoint[skip+1] == 'i' && readpoint[skip+2] == 'n' &&
-                // readpoint[3] == 's' && readpoint[4] == 'e' && readpoint[5] == 'r' && readpoint[6] == 't'
-                readpoint[skip+7] == ';')
+        // if _insert, then this is a prepared statement with multiple rows in arg4
+        if (statementlen >= 8 && cmd->arg4 && readpoint[skip] == '_' && (readpoint[skip+1] == 'i' || readpoint[skip+1] == 'I') &&
+             (readpoint[skip+2] == 'n' || readpoint[skip+2] == 'N'))
         {
-            list = cmd->arg4;
+            skip++;
+            
+            rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, &(statement), &readpoint);
+            if(rc != SQLITE_OK)
+            {
+                errat = "_prepare";
+                sqlite3_finalize(statement);
+                break;
+            }
             rc = SQLITE_DONE;
 
-            // Move over a list of records.
-            // Record name means name of table.
-            // There can be multiple different types of records, 
-            // but they should be grouped together.
-            while (rc == SQLITE_DONE && enif_get_list_cell(cmd->env, list, &head, &list))
+            if (!enif_get_list_cell(cmd->env, listTop, &headTop, &listTop))
             {
-                if (!enif_get_tuple(cmd->env, head, &rowLen, &insertRow) && rowLen > 1 && rowLen < 100)
+                rc = SQLITE_INTERRUPT;
+                sqlite3_finalize(statement);
+                break;
+            }
+
+            // Move over a list of records.
+            // First element is ignored as it is presumed to be record name.
+            while (rc == SQLITE_DONE && enif_get_list_cell(cmd->env, headTop, &headBot, &headTop))
+            {
+                if (!enif_get_tuple(cmd->env, headBot, &rowLen, &insertRow) && rowLen > 1 && rowLen < 100)
                 {
-                    errat = "not_tuple";
                     rc = SQLITE_INTERRUPT;
                     break;
-                }
-                if (!enif_get_atom(cmd->env,insertRow[0],rowName,20,ERL_NIF_LATIN1))
-                {
-                    errat = "missing_tablename";
-                    rc = SQLITE_INTERRUPT;
-                    break;
-                }
-                if (statement == NULL || strncmp(tableName,rowName,20) != 0)
-                {
-                    strncpy(tableName,rowName,20);
-                    insertStatementLen = 0;
-                    insertStatementLen += snprintf(insertStatement,1024,"insert or replace into %s values(",tableName);
-                    for (i = 1; i < rowLen && insertStatementLen < 1000; i++)
-                    {
-                        if (i+1 < rowLen)
-                            insertStatementLen += snprintf(insertStatement+insertStatementLen,1024-insertStatementLen,
-                                "?%d,",i);
-                        else
-                            insertStatementLen += snprintf(insertStatement+insertStatementLen,1024-insertStatementLen,
-                                "?%d",i);
-                    }
-                    strcat(insertStatement,");");
-                    rc = sqlite3_prepare_v2(cmd->conn->db, insertStatement, strlen(insertStatement), &statement, NULL);
-                    if(rc != SQLITE_OK)
-                    {
-                        errat = "prepare";
-                        sqlite3_finalize(statement);
-                        break;
-                    }
-                    rc = SQLITE_DONE;
                 }
 
                 for (i = 1; i < rowLen; i++)
                 {
                     if (bind_cell(cmd->env, insertRow[i], statement, i) == -1)
                     {
-                        rc = SQLITE_INTERRUPT;
                         errat = "cant_bind";
                         sqlite3_finalize(statement);
                         break;                        
