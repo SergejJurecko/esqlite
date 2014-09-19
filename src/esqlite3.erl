@@ -35,7 +35,7 @@
          parse_helper/1,parse_helper/2,wal_pages/1,
          backup_init/2,backup_step/2,backup_finish/1,backup_pages/1,
          lz4_compress/1,lz4_decompress/2,lz4_decompress/3,
-         replicate_opts/2,replicate_opts/3,replicate_status/1,tcp_connect/4,
+         replicate_opts/2,replicate_opts/3,replicate_status/1,tcp_connect/4,all_tunnel_call/1,
          tcp_connect_async/4,tcp_connect_async/5,make_wal_header/1,tcp_reconnect/0,wal_checksum/4,bind_insert/3]).
 
 -export([q/2, q/3, map/3, foreach/3]).
@@ -78,6 +78,11 @@ tcp_connect_async(Ip,Port,ConnectStr,ConnNumber,Type) ->
     Ref.
 tcp_reconnect() ->
     esqlite3_nif:tcp_reconnect().
+
+all_tunnel_call(Bin) ->
+    Ref = make_ref(),
+    ok = esqlite3_nif:all_tunnel_call(Ref,self(),Bin),
+    receive_answer(Ref).
 
 lz4_compress(B) ->
     esqlite3_nif:lz4_compress(B).

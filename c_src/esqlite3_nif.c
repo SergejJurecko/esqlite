@@ -161,7 +161,8 @@ typedef enum {
     cmd_tcp_connect,
     cmd_set_socket,
     cmd_tcp_reconnect,
-    cmd_bind_insert
+    cmd_bind_insert,
+    cmd_alltunnel_call
 } command_type;
 
 typedef struct {
@@ -200,6 +201,7 @@ void *command_create(int threadnum);
 static ERL_NIF_TERM do_tcp_connect1(esqlite_command *cmd, esqlite_thread* thread, int pos);
 static int bind_cell(ErlNifEnv *env, const ERL_NIF_TERM cell, sqlite3_stmt *stmt, unsigned int i);
 void errLogCallback(void *pArg, int iErrCode, const char *zMsg);
+void fail_send(int i);
 
 static ERL_NIF_TERM 
 make_atom(ErlNifEnv *env, const char *atom_name) 
@@ -261,7 +263,6 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
 {
     esqlite_thread *thread = (esqlite_thread *) data;
     esqlite_connection *conn = thread->curConn;
-    esqlite_command *ncmd = NULL;
     int i = 0;
     int completeSize = 0;
     struct iovec iov[PACKET_ITEMS];
@@ -273,9 +274,12 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
     char buff[PAGE_BUFF_SIZE];
     int buffUsed;
     int rt;
+    // char confirm[7] = {0,0,0,0,0,0,0};
 
     if (!conn->doReplicate)
+    {
         return;
+    }
     conn->nSent = conn->failFlags = 0;
 
 
@@ -323,28 +327,90 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
             // sockets are blocking. We presume we are not
             //  network bound thus there should not be a lot of blocking
             rt = writev(thread->sockets[i],iov,PACKET_ITEMS);
-            if (rt == -1)
+            if (rt != completeSize+4)
             {
                 conn->failFlags |= (1 << i);
-
                 close(thread->sockets[i]);
                 thread->sockets[i] = 0;
-
-                // tell control thread to create new connections for position i
-                void *item = command_create(-1);
-                ncmd = queue_get_item_data(item);
-                ncmd->type = cmd_tcp_connect;
-                ncmd->arg3 = enif_make_int(ncmd->env,i);
-                push_command(-1, item);
+                fail_send(i);
             }
             else
+            {
+                // rt = recv(thread->sockets[i],confirm,6,0);
+                // if (rt != 6 || confirm[4] != 'o' || confirm[5] != 'k')
+                // {
+                //     conn->failFlags |= (1 << i);
+                //     close(thread->sockets[i]);
+                //     thread->sockets[i] = 0;
+                //     fail_send(i);
+                // }
                 conn->nSent++;
+            }
         }
     }
 
     // var prefix only sent with first packet
     conn->packetVarPrefix.data = NULL;
     conn->packetVarPrefix.size = 0;
+}
+
+void fail_send(int i)
+{
+    esqlite_command *ncmd = NULL;
+    // tell control thread to create new connections for position i
+    void *item = command_create(-1);
+    ncmd = queue_get_item_data(item);
+    ncmd->type = cmd_tcp_connect;
+    ncmd->arg3 = enif_make_int(ncmd->env,i);
+    push_command(-1, item);
+}
+
+
+static ERL_NIF_TERM
+do_all_tunnel_call(esqlite_command *cmd,esqlite_thread *thread)
+{
+    struct iovec iov[2];
+    char packetLen[4];
+    char lenBin[2];
+    ErlNifBinary bin;
+    int nsent = 0, i = 0, rt = 0;
+    // char confirm[7] = {0,0,0,0,0,0,0};
+
+    enif_inspect_iolist_as_binary(cmd->env,cmd->arg,&(bin));
+
+    write32bit(packetLen,bin.size);
+    write16bit(lenBin,bin.size);
+
+    iov[0].iov_base = packetLen;
+    iov[0].iov_len = 4;
+    iov[1].iov_len = bin.size;
+    iov[1].iov_base = bin.data;
+
+    for (i = 0; i < MAX_CONNECTIONS; i++)
+    {
+        if (thread->sockets[i] > 3 && thread->socket_types[i] == 1)
+        {
+            rt = writev(thread->sockets[i],iov,2);
+            if (rt == -1)
+            {
+                close(thread->sockets[i]);
+                thread->sockets[i] = 0;
+
+                fail_send(i);
+            }
+            // rt = recv(thread->sockets[i],confirm,6,0);
+            // if (rt != 6 || confirm[4] != 'o' || confirm[5] != 'k')
+            // {
+            //     close(thread->sockets[i]);
+            //     thread->sockets[i] = 0;
+
+            //     fail_send(i);
+            // }
+            nsent++;
+        }
+    }
+
+    return enif_make_int(cmd->env,nsent);
 }
 
 static const char *
@@ -685,6 +751,11 @@ do_tcp_connect1(esqlite_command *cmd, esqlite_thread* thread, int pos)
     struct iovec iov[2];
     char packetLen[4];
     int *sockets;
+    char confirm[7] = {0,0,0,0,0,0,0};
+    int flag = 1, rt = 0, error = 0, opts;
+    socklen_t errlen = sizeof error;
+    struct timeval timeout;
+    fd_set fdset;
 
 
     write32bit(packetLen,thread->control->prefixes[pos].size);
@@ -699,34 +770,90 @@ do_tcp_connect1(esqlite_command *cmd, esqlite_thread* thread, int pos)
     for (i = 0; i < g_nthreads; i++)
     {
         fd = socket(AF_INET,SOCK_STREAM,0);
+        if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1)
+        {
+            close(fd);
+            result = make_error_tuple(cmd->env,"unable to set nonblock");
+            break;
+        }
+
         memset(&addr,0,sizeof(addr));
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = inet_addr(thread->control->addresses[pos]);
         addr.sin_port = htons(thread->control->ports[pos]);
-
-        if (connect(fd, (const void *)&addr, sizeof(addr)) == -1)
+        rt = connect(fd, (const void *)&addr, sizeof(addr));
+        if (errno != EINPROGRESS)
         {
             close(fd);
             result = make_error_tuple(cmd->env,"unable to connect");
             break;
         }
 
-        struct timeval timeout;      
+        FD_ZERO(&fdset);
+        FD_SET(fd, &fdset);
+        timeout.tv_sec = 1;
+        timeout.tv_usec = 0;
+
+        rt = select(fd + 1, NULL, &fdset, NULL, &timeout);
+        getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &errlen);
+        
+        if (rt != 1 || error != 0)
+        {
+            close(fd);
+            result = make_error_tuple(cmd->env,"unable to connect");
+            break;
+        }
+
+        opts = fcntl(fd,F_GETFL);
+        if (fcntl(fd, F_SETFL, opts & (~O_NONBLOCK)) == -1 || fcntl(fd,F_GETFL) & O_NONBLOCK)
+        {
+            close(fd);
+            result = make_error_tuple(cmd->env,"unable to set nonblock");
+            break;
+        }
+
+        if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (char*)&flag, sizeof(int)) != 0)
+        {
+            close(fd);
+            result = make_error_tuple(cmd->env,"unable to set sockopt");
+            break;
+        }
+        if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char*)&flag, sizeof(int)) != 0)
+        {
+            close(fd);
+            result = make_error_tuple(cmd->env,"unable to set sockopt");
+            break;
+        }
+        if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char*)&flag, sizeof(int)) != 0)
+        {
+            close(fd);
+            result = make_error_tuple(cmd->env,"unable to set sockopt");
+            break;
+        }
+
+        
         timeout.tv_sec = 2;
         timeout.tv_usec = 0;
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (char *)&timeout, sizeof(timeout));
+        timeout.tv_sec = 2;
+        timeout.tv_usec = 0;
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,sizeof(timeout));
 
-        if (thread->control->prefixes[pos].size+4 != writev(fd,iov,2))
+        rt = writev(fd,iov,2);
+        if (thread->control->prefixes[pos].size+4 != rt)
         {
             close(fd);
             result = make_error_tuple(cmd->env,"unable to initialize");
             break;
         }
 
-        int flag = 1;
-        setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (char*)&flag, sizeof(int));
-        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char*)&flag, sizeof(int));
-        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (char*)&flag, sizeof(int));
+        rt = recv(fd,confirm,6,0);
+        if (rt != 6 || confirm[4] != 'o' || confirm[5] != 'k')
+        {
+            close(fd);
+            result = make_error_tuple(cmd->env,"unable to initialize");
+            break;
+        }
 
         sockets[i] = fd;
     }
@@ -1318,6 +1445,8 @@ evaluate_command(esqlite_command *cmd,esqlite_thread *thread)
         return do_tcp_reconnect(cmd,thread);
     case cmd_bind_insert:
         return do_bind_insert(cmd,thread);
+    case cmd_alltunnel_call:
+        return do_all_tunnel_call(cmd,thread);
     case cmd_set_socket:
     {
         int fd = 0;
@@ -1470,7 +1599,7 @@ parse_helper(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         }
     }
 
-    enif_consume_timeslice(env,5);
+    enif_consume_timeslice(env,500);
 
     return atom_ok;
 }
@@ -1518,7 +1647,7 @@ esqlite_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         cmd->arg1 = 0;
     cmd->conn = conn;
     db_conn = enif_make_resource(env, conn);
-    enif_consume_timeslice(env,90);
+    enif_consume_timeslice(env,500);
     return enif_make_tuple2(env,push_command(conn->thread, item),db_conn);
 }
 
@@ -1553,7 +1682,7 @@ esqlite_replicate_opts(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     enif_alloc_binary(bin.size,&(conn->packetPrefix));
     memcpy(conn->packetPrefix.data,bin.data,bin.size);
 
-    enif_consume_timeslice(env,10);
+    enif_consume_timeslice(env,500);
     return atom_ok;
 }
 
@@ -1570,7 +1699,7 @@ esqlite_replicate_status(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
     }
     
-    enif_consume_timeslice(env,10);
+    enif_consume_timeslice(env,500);
     return enif_make_tuple2(env,enif_make_int(env,conn->nSent),enif_make_int(env,conn->failFlags));
 }
 // Called with: ref,pid, ip, port, connect string, connection number
@@ -1612,7 +1741,7 @@ tcp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     cmd->ref = enif_make_copy(cmd->env, argv[0]);
     cmd->pid = pid;
 
-    enif_consume_timeslice(env,50);
+    enif_consume_timeslice(env,500);
     return push_command(-1,item);
 }
 
@@ -1627,7 +1756,7 @@ tcp_reconnect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return make_error_tuple(env, "command_create_failed");
     cmd->type = cmd_tcp_reconnect;
 
-    enif_consume_timeslice(env,50);
+    enif_consume_timeslice(env,500);
 
     return push_command(-1,item);
 }
@@ -1659,7 +1788,7 @@ wal_header(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     sqlite3Put4byte(&binOut.data[24], aCksum[0]);
     sqlite3Put4byte(&binOut.data[28], aCksum[1]);
 
-    enif_consume_timeslice(env,10);
+    enif_consume_timeslice(env,500);
     return enif_make_binary(env,&binOut);
 }
 
@@ -1689,7 +1818,7 @@ wal_checksum(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     walChecksumBytes(1, bin.data, size, aCksum, aCksum);
 
-    enif_consume_timeslice(env,30);
+    enif_consume_timeslice(env,500);
 
     return enif_make_tuple2(env,enif_make_uint(env,aCksum[0]),enif_make_uint(env,aCksum[1]));
 }
@@ -1716,7 +1845,7 @@ esqlite_interrupt_query(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     cmd->conn = conn;
     enif_keep_resource(conn);
 
-    enif_consume_timeslice(env,80);
+    enif_consume_timeslice(env,500);
 
     return push_command(-1, item);
 }
@@ -1765,7 +1894,7 @@ esqlite_backup_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     cmd->arg = enif_make_copy(cmd->env, argv[3]);
     cmd->p = backup;
 
-    enif_consume_timeslice(env,90);
+    enif_consume_timeslice(env,500);
 
     return push_command(backup->thread, item);
 }
@@ -1802,7 +1931,7 @@ esqlite_backup_finish(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     enif_keep_resource(backup);
 
-    enif_consume_timeslice(env,90);
+    enif_consume_timeslice(env,500);
 
     return push_command(backup->thread, item);
 }
@@ -1820,7 +1949,7 @@ esqlite_backup_pages(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
     }
 
-    enif_consume_timeslice(env,10);
+    enif_consume_timeslice(env,500);
     return enif_make_tuple2(env, enif_make_int(env,sqlite3_backup_pagecount(backup->b)),
                                  enif_make_int(env,sqlite3_backup_remaining(backup->b)));
 }
@@ -1859,7 +1988,7 @@ esqlite_backup_step(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     enif_keep_resource(backup);
 
-    enif_consume_timeslice(env,80);
+    enif_consume_timeslice(env,500);
 
     return push_command(backup->thread, item);
 }
@@ -1882,7 +2011,7 @@ esqlite_lz4_compress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     ERL_NIF_TERM termbin = enif_make_binary(env,&binOut);
     enif_release_binary(&binOut);
 
-    enif_consume_timeslice(env,80);
+    enif_consume_timeslice(env,500);
     return enif_make_tuple2(env,termbin,enif_make_int(env,size));
 }
 
@@ -1913,7 +2042,7 @@ esqlite_lz4_decompress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     enif_alloc_binary(sizeOriginal,&binOut);
     int rt = LZ4_decompress_safe((char*)binIn.data,(char*)binOut.data,sizeReadNum,sizeOriginal);
-    enif_consume_timeslice(env,80);
+    enif_consume_timeslice(env,500);
     if (rt > 0)
     {
         ERL_NIF_TERM termout = enif_make_binary(env,&binOut);
@@ -1983,6 +2112,44 @@ esqlite_exec(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     return push_command(db->thread, item);
 }
 
+
+static ERL_NIF_TERM
+all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+{
+    esqlite_command *cmd = NULL;
+    ErlNifPid pid;
+    int i;
+
+    if (argc != 3)
+        return enif_make_badarg(env);
+
+    if(!enif_is_ref(env, argv[0])) 
+        return make_error_tuple(env, "invalid_ref");
+    if(!enif_get_local_pid(env, argv[1], &pid)) 
+        return make_error_tuple(env, "invalid_pid");
+    if (!(enif_is_binary(env,argv[2]) || enif_is_list(env,argv[2])))
+        return make_error_tuple(env, "invalid bin");
+
+    for (i = 0; i < g_nthreads; i++)
+    {
+        void *item = command_create(0);
+        cmd = queue_get_item_data(item);
+        if(!cmd) 
+            return make_error_tuple(env, "command_create_failed");
+
+        /* command */
+        cmd->type = cmd_alltunnel_call;
+        cmd->ref = enif_make_copy(cmd->env, argv[0]);
+        cmd->pid = pid;
+        cmd->arg = enif_make_copy(cmd->env, argv[2]);
+
+        enif_consume_timeslice(env,500);
+
+        push_command(i, item);
+    }
+    return atom_ok;
+}
+
 /*
  * Execute the sql statement
  */
@@ -2030,7 +2197,7 @@ esqlite_exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     cmd->conn = db;
     enif_keep_resource(db);
 
-    enif_consume_timeslice(env,80);
+    enif_consume_timeslice(env,500);
 
     return push_command(db->thread, item);
 }
@@ -2072,7 +2239,7 @@ esqlite_bind_insert(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     cmd->conn = db;
     enif_keep_resource(db);
 
-    enif_consume_timeslice(env,80);
+    enif_consume_timeslice(env,500);
 
     return push_command(db->thread, item);
 }
@@ -2269,7 +2436,7 @@ esqlite_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     cmd->p = conn->db;
     enif_keep_resource(conn);
 
-    enif_consume_timeslice(env,60);
+    enif_consume_timeslice(env,500);
     return push_command(conn->thread, item);
 
     // return atom_ok;
@@ -2405,7 +2572,8 @@ static ErlNifFunc nif_funcs[] = {
     {"tcp_connect",7,tcp_connect},
     {"tcp_reconnect",0,tcp_reconnect},
     {"wal_header",1,wal_header},
-    {"wal_checksum",4,wal_checksum}
+    {"wal_checksum",4,wal_checksum},
+    {"all_tunnel_call",3,all_tunnel_call}
 };
 
 ERL_NIF_INIT(esqlite3_nif, nif_funcs, on_load, NULL, NULL, on_unload);

@@ -52,8 +52,12 @@
          wal_header/1,
          wal_checksum/4,
          replicate_status/1,
-         bind_insert/5
+         bind_insert/5,
+         all_tunnel_call/3
 ]).
+
+all_tunnel_call(_,_,_) ->
+    exit(nif_library_not_loaded).
 
 bind_insert(_,_,_,_,_) ->
     exit(nif_library_not_loaded).
