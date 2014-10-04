@@ -1,6 +1,0 @@
-case os:type() of
-  {unit,darwin} ->
-    lists:keystore(port_specs,1,CONFIG,{port_specs,[{"priv/esqlite3_nif.so",["c_src/esqlite3_nif.c","c_src/queue.c"]}]});
-  _ ->
-    CONFIG
-end.

@@ -23,37 +23,41 @@
 #include <sys/mman.h>
 #include <dlfcn.h>
 #endif
-#include <unistd.h>
 
 #include <erl_nif.h>
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <fcntl.h>
+
 #ifndef  _WIN32
 #include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <sys/uio.h>
+#include <netinet/tcp.h>
+#else
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #endif
-#include <fcntl.h>
+
+
 
 #include "lz4.h"
 #include "queue.h"
 
 // #ifdef __APPLE__
-#ifndef _WIN32
+//#ifndef _WIN32
 // Directly include sqlite3.c
 // This way we are sure the included version of sqlite3 is actually used.
 // If we were to just include "sqlite3.h" OSX would actually use /usr/lib/libsqlite3.dylib
 #define SQLITE_API static 
 #define SQLITE_EXTERN static 
 #include "sqlite3.c" 
-#else
-#include "sqlite3.h"
-#endif
-
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <sys/uio.h>
-#include <netinet/tcp.h>
+//#else
+//#include "sqlite3.h"
+//#endif
 
 #define MAX_ATOM_LENGTH 255 /* from atom.h, not exposed in erlang include */
 #define MAX_PATHNAME 512 /* unfortunately not in sqlite.h. */
@@ -265,7 +269,11 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
     esqlite_connection *conn = thread->curConn;
     int i = 0;
     int completeSize = 0;
+#ifndef  _WIN32
     struct iovec iov[PACKET_ITEMS];
+#else
+    WSABUF iov[PACKET_ITEMS];
+#endif
     char packetLen[4];
     char lenPrefix[2];
     char lenPage[2];
@@ -296,6 +304,8 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
     write32bit(packetLen,completeSize);
     write16bit(lenPrefix,conn->packetPrefix.size);
     write16bit(lenVarPrefix,conn->packetVarPrefix.size);
+
+#ifndef _WIN32
     // Entire size
     iov[0].iov_base = packetLen;
     iov[0].iov_len = 4;
@@ -319,6 +329,31 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
     iov[7].iov_len = 2;
     iov[8].iov_base = buff;
     iov[8].iov_len = buffUsed;
+#else
+    // Entire size
+    iov[0].buf = packetLen;
+    iov[0].len = 4;
+    // Prefix size and prefix data
+    iov[1].buf = lenPrefix;
+    iov[1].len = 2;
+    iov[2].buf = conn->packetPrefix.data;
+    iov[2].len = conn->packetPrefix.size;
+    // Variable prefix
+    iov[3].buf = lenVarPrefix;
+    iov[3].len = 2;
+    iov[4].buf = conn->packetVarPrefix.data;
+    iov[4].len = conn->packetVarPrefix.size;
+    // header size and header data
+    iov[5].buf = &lenHeader;
+    iov[5].len = 1;
+    iov[6].buf = header;
+    iov[6].len = headersize;
+    // page size and page data
+    iov[7].buf = lenPage;
+    iov[7].len = 2;
+    iov[8].buf = buff;
+    iov[8].len = buffUsed;
+#endif
 
     for (i = 0; i < MAX_CONNECTIONS; i++)
     {
@@ -326,7 +361,12 @@ wal_page_hook(void *data,void *page,int pagesize,void* header, int headersize)
         {
             // sockets are blocking. We presume we are not
             //  network bound thus there should not be a lot of blocking
+#ifndef _WIN32            
             rt = writev(thread->sockets[i],iov,PACKET_ITEMS);
+#else
+            if (WSASend(thread->sockets[i],iov,PACKET_ITEMS, &rt, 0, NULL, NULL) != 0)
+                rt = 0;
+#endif
             if (rt != completeSize+4)
             {
                 conn->failFlags |= (1 << i);
@@ -369,7 +409,11 @@ void fail_send(int i)
 static ERL_NIF_TERM
 do_all_tunnel_call(esqlite_command *cmd,esqlite_thread *thread)
 {
-    struct iovec iov[2];
+#ifndef  _WIN32
+    struct iovec iov[PACKET_ITEMS];
+#else
+    WSABUF iov[PACKET_ITEMS];
+#endif
     char packetLen[4];
     char lenBin[2];
     ErlNifBinary bin;
@@ -381,16 +425,28 @@ do_all_tunnel_call(esqlite_command *cmd,esqlite_thread *thread)
     write32bit(packetLen,bin.size);
     write16bit(lenBin,bin.size);
 
+#ifndef  _WIN32
     iov[0].iov_base = packetLen;
     iov[0].iov_len = 4;
     iov[1].iov_len = bin.size;
     iov[1].iov_base = bin.data;
+#else
+    iov[0].buf = packetLen;
+    iov[0].len = 4;
+    iov[1].len = bin.size;
+    iov[1].buf = bin.data;
+#endif
 
     for (i = 0; i < MAX_CONNECTIONS; i++)
     {
         if (thread->sockets[i] > 3 && thread->socket_types[i] == 1)
         {
+#ifndef _WIN32
             rt = writev(thread->sockets[i],iov,2);
+#else
+            if (WSASend(thread->sockets[i],iov,2, &rt, 0, NULL, NULL) != 0)
+                rt = 0;
+#endif
             if (rt == -1)
             {
                 close(thread->sockets[i]);
@@ -492,13 +548,15 @@ void *
 command_create(int threadnum)
 {
     esqlite_thread *thread = NULL;
+    void *item;
+    esqlite_command *cmd;
     if (threadnum == -1)
         thread = &g_control_thread;
     else
         thread = &(g_threads[threadnum]);
 
-    void *item = queue_get_item(thread->commands);
-    esqlite_command *cmd = queue_get_item_data(item);
+    item = queue_get_item(thread->commands);
+    cmd = queue_get_item_data(item);
     if (cmd == NULL)
     {
         cmd = (esqlite_command *) enif_alloc(sizeof(esqlite_command));
@@ -523,6 +581,8 @@ static void
 destruct_esqlite_connection(ErlNifEnv *env, void *arg)
 {
     esqlite_connection *conn = (esqlite_connection *) arg;
+    void *item;
+    esqlite_command *cmd;
 
     if (!conn->packetPrefix.size)
         enif_release_binary(&conn->packetPrefix);
@@ -532,8 +592,8 @@ destruct_esqlite_connection(ErlNifEnv *env, void *arg)
     conn->open = 0;
     // enif_release_resource(cmd->conn);
     
-    void *item = command_create(conn->thread);
-    esqlite_command *cmd = queue_get_item_data(item);
+    item = command_create(conn->thread);
+    cmd = queue_get_item_data(item);
 
     /* Send the stop command 
      */
@@ -614,9 +674,10 @@ static ERL_NIF_TERM
 do_backup_init(esqlite_command *cmd, esqlite_thread *thread) 
 {
     esqlite_backup *p = (esqlite_backup *)cmd->p;
+    ERL_NIF_TERM backup_term;
 
     p->b = sqlite3_backup_init(p->dst,"main",p->src,"main");
-    ERL_NIF_TERM backup_term = enif_make_resource(cmd->env, p);
+    backup_term = enif_make_resource(cmd->env, p);
 
     enif_release_resource(p);
     if (!(p->b))
@@ -748,7 +809,11 @@ do_tcp_connect1(esqlite_command *cmd, esqlite_thread* thread, int pos)
     int fd;
     ERL_NIF_TERM result = atom_ok;
     esqlite_command *ncmd = NULL;
+#ifndef _WIN32
     struct iovec iov[2];
+#else
+    WSABUF iov[2];
+#endif
     char packetLen[4];
     int *sockets;
     char confirm[7] = {0,0,0,0,0,0,0};
@@ -759,10 +824,17 @@ do_tcp_connect1(esqlite_command *cmd, esqlite_thread* thread, int pos)
 
 
     write32bit(packetLen,thread->control->prefixes[pos].size);
+#ifndef _WIN32
     iov[0].iov_base = packetLen;
     iov[0].iov_len = 4;
     iov[1].iov_base = thread->control->prefixes[pos].data;
     iov[1].iov_len = thread->control->prefixes[pos].size;
+#else
+    iov[0].buf = packetLen;
+    iov[0].len = 4;
+    iov[1].buf = thread->control->prefixes[pos].data;
+    iov[1].len = thread->control->prefixes[pos].size;
+#endif
 
     sockets = enif_alloc(sizeof(int)*g_nthreads);
     memset(sockets,0,sizeof(int)*g_nthreads);
@@ -770,7 +842,13 @@ do_tcp_connect1(esqlite_command *cmd, esqlite_thread* thread, int pos)
     for (i = 0; i < g_nthreads; i++)
     {
         fd = socket(AF_INET,SOCK_STREAM,0);
+
+#ifndef _WIN32
         if (fcntl(fd, F_SETFL, O_NONBLOCK) == -1)
+#else
+        opts = 1;
+        if (ioctlsocket(fd, FIONBIO, &opts) != 0)
+#endif
         {
             close(fd);
             result = make_error_tuple(cmd->env,"unable to set nonblock");
@@ -782,7 +860,11 @@ do_tcp_connect1(esqlite_command *cmd, esqlite_thread* thread, int pos)
         addr.sin_addr.s_addr = inet_addr(thread->control->addresses[pos]);
         addr.sin_port = htons(thread->control->ports[pos]);
         rt = connect(fd, (const void *)&addr, sizeof(addr));
+#ifndef _WIN32
         if (errno != EINPROGRESS)
+#else
+        if (WSAGetLastError() != WSAEWOULDBLOCK)
+#endif
         {
             close(fd);
             result = make_error_tuple(cmd->env,"unable to connect");
@@ -795,7 +877,11 @@ do_tcp_connect1(esqlite_command *cmd, esqlite_thread* thread, int pos)
         timeout.tv_usec = 0;
 
         rt = select(fd + 1, NULL, &fdset, NULL, &timeout);
+#ifndef _WIN32
         getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &errlen);
+#else
+        getsockopt(fd, SOL_SOCKET, SO_ERROR, (char*)&error, &errlen);
+#endif
         
         if (rt != 1 || error != 0)
         {
@@ -804,11 +890,16 @@ do_tcp_connect1(esqlite_command *cmd, esqlite_thread* thread, int pos)
             break;
         }
 
+#ifndef _WIN32
         opts = fcntl(fd,F_GETFL);
         if (fcntl(fd, F_SETFL, opts & (~O_NONBLOCK)) == -1 || fcntl(fd,F_GETFL) & O_NONBLOCK)
+#else
+        opts = 0;
+        if (ioctlsocket(fd, FIONBIO, &opts) != 0)
+#endif
         {
             close(fd);
-            result = make_error_tuple(cmd->env,"unable to set nonblock");
+            result = make_error_tuple(cmd->env,"unable to set blocking mode");
             break;
         }
 
@@ -838,8 +929,12 @@ do_tcp_connect1(esqlite_command *cmd, esqlite_thread* thread, int pos)
         timeout.tv_sec = 2;
         timeout.tv_usec = 0;
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout,sizeof(timeout));
-
+#ifndef _WIN32
         rt = writev(fd,iov,2);
+#else
+        if (WSASend(fd,iov,2, &rt, 0, NULL, NULL) != 0)
+            rt = 0;
+#endif
         if (thread->control->prefixes[pos].size+4 != rt)
         {
             close(fd);
@@ -1615,6 +1710,7 @@ esqlite_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     ErlNifPid pid;
     esqlite_connection* conn;
     ERL_NIF_TERM db_conn;
+    void *item;
      
     if(!(argc == 4 || argc == 5)) 
 	    return enif_make_badarg(env);     
@@ -1632,7 +1728,7 @@ esqlite_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     memset(conn,0,sizeof(esqlite_connection));
     conn->thread %= g_nthreads;
 
-    void *item = command_create(conn->thread);
+    item = command_create(conn->thread);
     cmd = queue_get_item_data(item);
     if(!cmd) 
         return make_error_tuple(env, "command_create_failed");
@@ -1708,6 +1804,7 @@ tcp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     esqlite_command *cmd = NULL;
     ErlNifPid pid;
+    void *item;
 
     if (!(argc == 6 || argc == 7))
         return enif_make_badarg(env);
@@ -1727,7 +1824,7 @@ tcp_connect(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if (argc == 7 && !enif_is_number(env,argv[6]))
         return enif_make_badarg(env);
 
-    void *item = command_create(-1);
+    item = command_create(-1);
     cmd = queue_get_item_data(item);
     if(!cmd)
         return make_error_tuple(env, "command_create_failed");
@@ -1828,6 +1925,7 @@ esqlite_interrupt_query(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     esqlite_command *cmd = NULL;
     esqlite_connection* conn;
+    void *item;
 
     if(argc != 1) 
         return enif_make_badarg(env);  
@@ -1836,7 +1934,7 @@ esqlite_interrupt_query(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     {
         return enif_make_badarg(env);
     }   
-    void *item = command_create(-1);
+    item = command_create(-1);
     cmd = queue_get_item_data(item);
     if(!cmd) 
         return make_error_tuple(env, "command_create_failed");
@@ -1859,6 +1957,7 @@ esqlite_backup_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     esqlite_command *cmd = NULL;
     esqlite_backup* backup;
     ErlNifPid pid;
+    void *item;
      
     if(argc != 4) 
         return enif_make_badarg(env);  
@@ -1876,7 +1975,7 @@ esqlite_backup_init(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if(!enif_get_local_pid(env, argv[3], &pid)) 
         return make_error_tuple(env, "invalid_pid"); 
 
-    void *item = command_create(dbsrc->thread);
+    item = command_create(dbsrc->thread);
     cmd = queue_get_item_data(item);
     if(!cmd) 
         return make_error_tuple(env, "command_create_failed");
@@ -1905,6 +2004,7 @@ esqlite_backup_finish(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     esqlite_command *cmd = NULL;
     esqlite_backup* backup;
     ErlNifPid pid;
+    void *item;
 
     if (argc != 3)
         return enif_make_badarg(env);
@@ -1918,7 +2018,7 @@ esqlite_backup_finish(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if(!enif_get_local_pid(env, argv[2], &pid)) 
         return make_error_tuple(env, "invalid_pid"); 
 
-    void *item = command_create(backup->thread);
+    item = command_create(backup->thread);
     cmd = queue_get_item_data(item);
     if(!cmd) 
         return make_error_tuple(env, "command_create_failed");
@@ -1960,6 +2060,7 @@ esqlite_backup_step(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     esqlite_command *cmd = NULL;
     esqlite_backup* backup;
     ErlNifPid pid;
+    void *item;
 
     if (argc != 4)
         return enif_make_badarg(env);
@@ -1975,7 +2076,7 @@ esqlite_backup_step(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if(!enif_get_int(env, argv[3], &(backup->pages_for_step))) 
         return make_error_tuple(env, "invalid_thread_number");
 
-    void *item = command_create(backup->thread);
+    item = command_create(backup->thread);
     cmd = queue_get_item_data(item);
     if(!cmd) 
         return make_error_tuple(env, "command_create_failed");
@@ -1998,6 +2099,8 @@ esqlite_lz4_compress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     ErlNifBinary binIn;
     ErlNifBinary binOut;
+    int size;
+    ERL_NIF_TERM termbin;
 
     if (argc != 1)
         return enif_make_badarg(env);
@@ -2007,8 +2110,8 @@ esqlite_lz4_compress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     enif_alloc_binary(LZ4_COMPRESSBOUND(binIn.size),&binOut);
 
-    int size = LZ4_compress((char*)binIn.data,(char*)binOut.data,binIn.size);
-    ERL_NIF_TERM termbin = enif_make_binary(env,&binOut);
+    size = LZ4_compress((char*)binIn.data,(char*)binOut.data,binIn.size);
+    termbin = enif_make_binary(env,&binOut);
     enif_release_binary(&binOut);
 
     enif_consume_timeslice(env,500);
@@ -2022,6 +2125,7 @@ esqlite_lz4_decompress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     ErlNifBinary binOut;
     int sizeOriginal;
     int sizeReadNum;
+    int rt;
 
     if (argc != 2 && argc != 3)
         return enif_make_badarg(env);
@@ -2041,7 +2145,7 @@ esqlite_lz4_decompress(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         sizeReadNum = binIn.size;
 
     enif_alloc_binary(sizeOriginal,&binOut);
-    int rt = LZ4_decompress_safe((char*)binIn.data,(char*)binOut.data,sizeReadNum,sizeOriginal);
+    rt = LZ4_decompress_safe((char*)binIn.data,(char*)binOut.data,sizeReadNum,sizeOriginal);
     enif_consume_timeslice(env,500);
     if (rt > 0)
     {
@@ -2083,6 +2187,7 @@ esqlite_exec(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     esqlite_connection *db;
     esqlite_command *cmd = NULL;
     ErlNifPid pid;
+    void *item;
      
     if(argc != 4) 
 	    return enif_make_badarg(env);  
@@ -2096,7 +2201,7 @@ esqlite_exec(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if(!enif_get_local_pid(env, argv[2], &pid)) 
 	    return make_error_tuple(env, "invalid_pid"); 
 
-    void *item = command_create(db->thread);
+    item = command_create(db->thread);
     cmd = queue_get_item_data(item);
     if(!cmd) 
         return make_error_tuple(env, "command_create_failed");
@@ -2119,6 +2224,7 @@ all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     esqlite_command *cmd = NULL;
     ErlNifPid pid;
     int i;
+    void *item;
 
     if (argc != 3)
         return enif_make_badarg(env);
@@ -2132,7 +2238,7 @@ all_tunnel_call(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     for (i = 0; i < g_nthreads; i++)
     {
-        void *item = command_create(0);
+        item = command_create(0);
         cmd = queue_get_item_data(item);
         if(!cmd) 
             return make_error_tuple(env, "command_create_failed");
@@ -2159,6 +2265,7 @@ esqlite_exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     esqlite_connection *db;
     esqlite_command *cmd = NULL;
     ErlNifPid pid;
+    void *item;
      
     if(argc != 7 && argc != 8) 
         return enif_make_badarg(env);  
@@ -2179,7 +2286,7 @@ esqlite_exec_script(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return make_error_tuple(env, "appendparam not binary");    
 
     
-    void *item = command_create(db->thread);
+    item = command_create(db->thread);
     cmd = queue_get_item_data(item);
     if(!cmd) 
         return make_error_tuple(env, "command_create_failed");
@@ -2209,6 +2316,7 @@ esqlite_bind_insert(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     esqlite_connection *db;
     esqlite_command *cmd = NULL;
     ErlNifPid pid;
+    void *item;
 
     if(argc != 5) 
         return enif_make_badarg(env);  
@@ -2225,7 +2333,7 @@ esqlite_bind_insert(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if (!(enif_is_list(env,argv[4])))
         return make_error_tuple(env,"invalid bind parameters");
 
-    void *item = command_create(db->thread);
+    item = command_create(db->thread);
     cmd = queue_get_item_data(item);
     if(!cmd) 
         return make_error_tuple(env, "command_create_failed");
@@ -2253,6 +2361,7 @@ esqlite_prepare(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     esqlite_connection *conn;
     esqlite_command *cmd = NULL;
     ErlNifPid pid;
+    void *item;
 
     if(argc != 4) 
 	    return enif_make_badarg(env);
@@ -2263,7 +2372,7 @@ esqlite_prepare(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if(!enif_get_local_pid(env, argv[2], &pid)) 
 	    return make_error_tuple(env, "invalid_pid"); 
 
-    void *item = command_create(conn->thread);
+    item = command_create(conn->thread);
     cmd = queue_get_item_data(item);
     if(!cmd) 
         return make_error_tuple(env, "command_create_failed");
@@ -2287,6 +2396,7 @@ esqlite_bind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     esqlite_statement *stmt;
     esqlite_command *cmd = NULL;
     ErlNifPid pid;
+    void *item;
 
     if(argc != 4) 
 	    return enif_make_badarg(env);
@@ -2297,7 +2407,7 @@ esqlite_bind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if(!enif_get_local_pid(env, argv[2], &pid)) 
 	    return make_error_tuple(env, "invalid_pid"); 
 
-    void *item = command_create(stmt->thread);
+    item = command_create(stmt->thread);
     cmd = queue_get_item_data(item);
     if(!cmd) 
 	    return make_error_tuple(env, "command_create_failed");
@@ -2320,6 +2430,7 @@ esqlite_step(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     esqlite_statement *stmt;
     esqlite_command *cmd = NULL;
     ErlNifPid pid;
+    void *item;
 
     if(argc != 3) 
 	    return enif_make_badarg(env);
@@ -2332,7 +2443,7 @@ esqlite_step(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if(!stmt->statement) 
 	    return make_error_tuple(env, "no_prepared_statement");
 
-    void *item = command_create(stmt->thread);
+    item = command_create(stmt->thread);
     cmd = queue_get_item_data(item);
     if(!cmd) 
         return make_error_tuple(env, "command_create_failed");
@@ -2351,6 +2462,7 @@ esqlite_noop(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     esqlite_connection *conn;
     esqlite_command *cmd = NULL;
     ErlNifPid pid;
+    void *item;
 
     if(argc != 3) 
         return enif_make_badarg(env);
@@ -2361,7 +2473,7 @@ esqlite_noop(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if(!enif_get_local_pid(env, argv[2], &pid)) 
         return make_error_tuple(env, "invalid_pid"); 
 
-    void *item = command_create(conn->thread);
+    item = command_create(conn->thread);
     cmd = queue_get_item_data(item);
     if(!cmd) 
         return make_error_tuple(env, "command_create_failed");
@@ -2382,6 +2494,7 @@ esqlite_column_names(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     esqlite_statement *stmt;
     esqlite_command *cmd = NULL;
     ErlNifPid pid;
+    void *item;
 
     if(argc != 3) 
 	    return enif_make_badarg(env);
@@ -2394,7 +2507,7 @@ esqlite_column_names(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if(!stmt->statement) 
 	    return make_error_tuple(env, "no_prepared_statement");
 
-    void *item = command_create(stmt->thread);
+    item = command_create(stmt->thread);
     cmd = queue_get_item_data(item);
     if(!cmd) 
         return make_error_tuple(env, "command_create_failed");
@@ -2416,6 +2529,7 @@ esqlite_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     esqlite_connection *conn;
     esqlite_command *cmd = NULL;
     ErlNifPid pid;
+    void *item;
 
     if(!enif_get_resource(env, argv[0], esqlite_connection_type, (void **) &conn))
 	    return enif_make_badarg(env);
@@ -2424,7 +2538,7 @@ esqlite_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     if(!enif_get_local_pid(env, argv[2], &pid)) 
 	    return make_error_tuple(env, "invalid_pid"); 
 
-    void *item = command_create(conn->thread);
+    item = command_create(conn->thread);
     cmd = queue_get_item_data(item);
     if(!cmd) 
         return make_error_tuple(env, "command_create_failed");
@@ -2455,6 +2569,12 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
 {
     ErlNifResourceType *rt;
     int i = 0;
+
+#ifdef _WIN32
+    WSADATA wsd;
+    if (WSAStartup(MAKEWORD(1, 1), &wsd) != 0)
+        return -1;
+#endif
 
     sqlite3_initialize();
     sqlite3_config(SQLITE_CONFIG_LOG, errLogCallback, NULL);
