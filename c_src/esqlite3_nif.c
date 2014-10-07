@@ -18,7 +18,7 @@
  * sqlite3_nif -- an erlang sqlite nif.
 */
 
-#ifdef linux
+#ifdef __linux__
 #define _GNU_SOURCE 1
 #include <sys/mman.h>
 #include <dlfcn.h>
@@ -31,6 +31,7 @@
 #include <fcntl.h>
 
 #ifndef  _WIN32
+#include <sys/time.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -1086,8 +1087,8 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
                                     sqlite3_wal_page_hook(cmd->conn->db,
                                                 wal_page_hook,
                                                 thread,
-                                                (u64*)&(cmd->conn->writeNumber),
-                                                (u64*)&(cmd->conn->writeTermNumber));
+                                                (unsigned long long int*)&(cmd->conn->writeNumber),
+                                                (unsigned long long int*)&(cmd->conn->writeTermNumber));
 
     if (!enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin))
         return make_error_tuple(cmd->env, "not iolist");
@@ -1862,7 +1863,7 @@ static ERL_NIF_TERM
 wal_header(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
     int szPage;
-    u32 aCksum[2];                /* Checksum for wal-header */
+    unsigned int aCksum[2];                /* Checksum for wal-header */
     ErlNifBinary binOut;
 
     if (argc != 1)
@@ -1892,8 +1893,8 @@ wal_header(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 static ERL_NIF_TERM
 wal_checksum(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 {
-    u32 cksum1,cksum2;
-    u32 aCksum[2] = {0,0};
+    unsigned int cksum1,cksum2;
+    unsigned int aCksum[2] = {0,0};
     ErlNifBinary bin;
     int size;
 
