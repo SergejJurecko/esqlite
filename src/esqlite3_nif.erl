@@ -28,10 +28,10 @@
          exec_script/7, 
          exec_script/8,
          prepare/4,
-         step/3,
-         finalize/3,
-         bind/4,
-         column_names/3,
+         % step/3,
+         % finalize/3,
+         % bind/4,
+         % column_names/3,
          close/3,
          noop/3,
          parse_helper/2,
@@ -193,8 +193,8 @@ step(_Stmt, _Ref, _Dest) ->
 %% @doc
 %%
 %%
-finalize(_Stmt, _Ref, _Dest) ->
-    exit(nif_library_not_loaded).
+% finalize(_Stmt, _Ref, _Dest) ->
+%     exit(nif_library_not_loaded).
 
 %% @doc Bind parameters to a prepared statement. 
 %%

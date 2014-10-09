@@ -67,11 +67,9 @@
 #define PACKET_ITEMS 9
 
 static ErlNifResourceType *esqlite_connection_type = NULL;
-static ErlNifResourceType *esqlite_statement_type = NULL;
 static ErlNifResourceType *esqlite_backup_type = NULL;
 
 typedef struct esqlite_connection esqlite_connection;
-typedef struct esqlite_statement esqlite_statement;
 typedef struct esqlite_backup esqlite_backup;
 typedef struct esqlite_thread esqlite_thread;
 typedef struct esqlite_control_data esqlite_control_data;
@@ -107,6 +105,13 @@ esqlite_thread g_control_thread;
 ErlNifUInt64 g_dbcount = 0;
 ErlNifMutex *g_dbcount_mutex = NULL;
 
+
+// struct _statement {
+
+//     char type;
+//     sqlite3_stmt *statement;
+// };
+
 /* database connection context */
 struct esqlite_connection{
     unsigned int thread;
@@ -130,12 +135,9 @@ struct esqlite_connection{
     ErlNifBinary packetPrefix;
     // Variable part of packet prefix
     ErlNifBinary packetVarPrefix;
-};
 
-/* prepared statement */
-struct esqlite_statement {
-    unsigned int thread;
-    sqlite3_stmt *statement;
+    sqlite3_stmt **prepared;
+    int nprepared;
 };
 
 /* backup object */
@@ -584,6 +586,7 @@ destruct_esqlite_connection(ErlNifEnv *env, void *arg)
     esqlite_connection *conn = (esqlite_connection *) arg;
     void *item;
     esqlite_command *cmd;
+    int i = 0;
 
     if (!conn->packetPrefix.size)
         enif_release_binary(&conn->packetPrefix);
@@ -591,6 +594,14 @@ destruct_esqlite_connection(ErlNifEnv *env, void *arg)
     if (!conn->open)
         return;
     conn->open = 0;
+
+    for (i = 0; i < conn->nprepared; i++)
+    {
+        sqlite3_finalize(conn->prepared[i]);
+    }
+    conn->nprepared = 0;
+    free(conn->prepared);
+
     // enif_release_resource(cmd->conn);
     
     item = command_create(conn->thread);
@@ -622,16 +633,6 @@ destruct_esqlite_backup(ErlNifEnv *env, void *arg)
     }
 }
 
-static void
-destruct_esqlite_statement(ErlNifEnv *env, void *arg)
-{
-    esqlite_statement *stmt = (esqlite_statement *) arg;
-
-    if(stmt->statement) {
-	   sqlite3_finalize(stmt->statement);
-	   stmt->statement = NULL;
-    }
-}
 
 static ERL_NIF_TERM
 do_open(esqlite_command *cmd, esqlite_thread *thread) 
@@ -1114,24 +1115,37 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
         statementlen = end-readpoint;
         
         // if _insert, then this is a prepared statement with multiple rows in arg4
-        if (statementlen >= 8 && cmd->arg4 && readpoint[skip] == '_' && (readpoint[skip+1] == 'i' || readpoint[skip+1] == 'I') &&
-             (readpoint[skip+2] == 'n' || readpoint[skip+2] == 'N'))
+        if ((statementlen >= 8 && cmd->arg4 && readpoint[skip] == '_' && (readpoint[skip+1] == 'i' || readpoint[skip+1] == 'I') &&
+             (readpoint[skip+2] == 'n' || readpoint[skip+2] == 'N')) ||
+            (statementlen >= 4 && cmd->arg4 && readpoint[skip] == '#' && readpoint[skip+3] == ';'))
         {
-            skip++;
-            
-            rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, &(statement), &readpoint);
-            if(rc != SQLITE_OK)
+            if (readpoint[skip] == '#')
             {
-                errat = "_prepare";
-                sqlite3_finalize(statement);
-                break;
+                rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip+1), statementlen, &(statement), &readpoint);
+                if(rc != SQLITE_OK)
+                {
+                    errat = "_prepare";
+                    sqlite3_finalize(statement);
+                    break;
+                }
+                rc = SQLITE_DONE;
             }
-            rc = SQLITE_DONE;
+            else
+            {
+                i = (readpoint[skip+1] - '0')*10 + (readpoint[skip+2]-'0');
+                if (i > cmd->conn->nprepared)
+                {
+                    rc = SQLITE_INTERRUPT;
+                    break;
+                }
+                statement = cmd->conn->prepared[i];
+            }
 
             if (!enif_get_list_cell(cmd->env, listTop, &headTop, &listTop))
             {
                 rc = SQLITE_INTERRUPT;
-                sqlite3_finalize(statement);
+                if (readpoint[skip] != '#')
+                    sqlite3_finalize(statement);
                 break;
             }
 
@@ -1150,14 +1164,33 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
                     if (bind_cell(cmd->env, insertRow[i], statement, i) == -1)
                     {
                         errat = "cant_bind";
-                        sqlite3_finalize(statement);
+                        if (readpoint[skip] != '#')
+                            sqlite3_finalize(statement);
                         break;                        
                     }
                 }
                 rc = sqlite3_step(statement);
                 sqlite3_reset(statement);
             }
+
+            if (readpoint[skip] != '#')
+                sqlite3_finalize(statement);
         }
+        // if (statementlen >= 4 && cmd->arg4 && readpoint[skip] == '#' && readpoint[skip+3] == ';')
+        // {
+        //     i = (readpoint[skip+1] - '0')*10 + (readpoint[skip+2]-'0');
+        //     if (i > cmd->conn->nprepared)
+        //     {
+        //         rc = SQLITE_INTERRUPT;
+        //         break;
+        //     }
+        //     if (!enif_get_list_cell(cmd->env, listTop, &headTop, &listTop))
+        //     {
+        //         rc = SQLITE_INTERRUPT;
+        //         sqlite3_finalize(statement);
+        //         break;
+        //     }
+        // }
         else
         {
             rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, &(statement), &readpoint);
@@ -1254,28 +1287,23 @@ static ERL_NIF_TERM
 do_prepare(esqlite_command *cmd, esqlite_thread *thread)
 {
     ErlNifBinary bin;
-    esqlite_statement *stmt;
-    ERL_NIF_TERM esqlite_stmt;
+    sqlite3_stmt *stmt;
     const char *tail;
-    int rc = 0;
+    int rc = 0, index = 0;
 
     enif_inspect_iolist_as_binary(cmd->env, cmd->arg, &bin);
 
-    stmt = enif_alloc_resource(esqlite_statement_type, sizeof(esqlite_statement));
-    if(!stmt) 
-	    return make_error_tuple(cmd->env, "no_memory");
-
-    rc = sqlite3_prepare_v2(cmd->conn->db, (char *) bin.data, bin.size, &(stmt->statement), &tail);
+    rc = sqlite3_prepare_v2(cmd->conn->db, (char *)bin.data, bin.size, &stmt, &tail);
     if(rc != SQLITE_OK)
 	    return make_sqlite3_error_tuple(cmd->env, "sqlite3_prepare_v2 in do_prepare", rc, cmd->conn->db);
 
+    index = cmd->conn->nprepared++;
+    cmd->conn->prepared = realloc(cmd->conn->prepared,sizeof(sqlite3_stmt*)*(index+1));
+    cmd->conn->prepared[index] = stmt;
+
     enif_release_resource(cmd->conn);
-    stmt->thread = cmd->conn->thread;
 
-    esqlite_stmt = enif_make_resource(cmd->env, stmt);
-    enif_release_resource(stmt);
-
-    return make_ok_tuple(cmd->env, esqlite_stmt);
+    return make_ok_tuple(cmd->env, enif_make_int(cmd->env,index));
 }
 
 static int
@@ -1333,35 +1361,35 @@ bind_cell(ErlNifEnv *env, const ERL_NIF_TERM cell, sqlite3_stmt *stmt, unsigned 
 
 
 
-static ERL_NIF_TERM
-do_bind(esqlite_command *cmd, esqlite_thread *thread)
-{
-    int parameter_count = sqlite3_bind_parameter_count(cmd->stmt);
-    int i, is_list, r;
-    ERL_NIF_TERM list, head, tail;
-    unsigned int list_length;
+// static ERL_NIF_TERM
+// do_bind(esqlite_command *cmd, esqlite_thread *thread)
+// {
+//     int parameter_count = sqlite3_bind_parameter_count(cmd->stmt);
+//     int i, is_list, r;
+//     ERL_NIF_TERM list, head, tail;
+//     unsigned int list_length;
 
-    is_list = enif_get_list_length(cmd->env, cmd->arg, &list_length);
-    if(!is_list) 
-	    return make_error_tuple(cmd->env, "bad_arg_list");
-    if(parameter_count != list_length) 
-	    return make_error_tuple(cmd->env, "args_wrong_length");
+//     is_list = enif_get_list_length(cmd->env, cmd->arg, &list_length);
+//     if(!is_list) 
+// 	    return make_error_tuple(cmd->env, "bad_arg_list");
+//     if(parameter_count != list_length) 
+// 	    return make_error_tuple(cmd->env, "args_wrong_length");
 
-    sqlite3_reset(cmd->stmt);
+//     sqlite3_reset(cmd->stmt);
      
-    list = cmd->arg;
-    for(i=0; i < list_length; i++) {
-	    enif_get_list_cell(cmd->env, list, &head, &tail);
-	    r = bind_cell(cmd->env, head, cmd->stmt, i+1);
-	    if(r == -1) 
-	        return make_error_tuple(cmd->env, "wrong_type");
-	    if(r != SQLITE_OK)
-	        return make_error_tuple(cmd->env, "sqlite_not_ok");
-	    list = tail;
-    }
+//     list = cmd->arg;
+//     for(i=0; i < list_length; i++) {
+// 	    enif_get_list_cell(cmd->env, list, &head, &tail);
+// 	    r = bind_cell(cmd->env, head, cmd->stmt, i+1);
+// 	    if(r == -1) 
+// 	        return make_error_tuple(cmd->env, "wrong_type");
+// 	    if(r != SQLITE_OK)
+// 	        return make_error_tuple(cmd->env, "sqlite_not_ok");
+// 	    list = tail;
+//     }
      
-    return atom_ok;
-}
+//     return atom_ok;
+// }
 
 static ERL_NIF_TERM
 make_binary(ErlNifEnv *env, const void *bytes, unsigned int size) 
@@ -1426,56 +1454,56 @@ make_row(ErlNifEnv *env, sqlite3_stmt *statement)
     return row;
 }
 
-static ERL_NIF_TERM
-do_step(esqlite_command *cmd, esqlite_thread *thread)
-{
-    int rc = sqlite3_step(cmd->stmt);
+// static ERL_NIF_TERM
+// do_step(esqlite_command *cmd, esqlite_thread *thread)
+// {
+//     int rc = sqlite3_step(cmd->stmt);
 
-    if(rc == SQLITE_ROW) 
-        return make_row(cmd->env, cmd->stmt);
-    if(rc == SQLITE_DONE) 
-	    return make_atom(cmd->env, "$done");
-    if(rc == SQLITE_BUSY)
-	    return make_atom(cmd->env, "$busy");
+//     if(rc == SQLITE_ROW) 
+//         return make_row(cmd->env, cmd->stmt);
+//     if(rc == SQLITE_DONE) 
+// 	    return make_atom(cmd->env, "$done");
+//     if(rc == SQLITE_BUSY)
+// 	    return make_atom(cmd->env, "$busy");
 
-    if(rc == SQLITE_ERROR)
-        return make_error_tuple(cmd->env, "step_sqlite_error");
-    if(rc == SQLITE_MISUSE)
-        return make_error_tuple(cmd->env, "misuse");
+//     if(rc == SQLITE_ERROR)
+//         return make_error_tuple(cmd->env, "step_sqlite_error");
+//     if(rc == SQLITE_MISUSE)
+//         return make_error_tuple(cmd->env, "misuse");
 
-    return make_error_tuple(cmd->env, "unexpected_return_value");
-}
+//     return make_error_tuple(cmd->env, "unexpected_return_value");
+// }
 
-static ERL_NIF_TERM
-do_column_names(esqlite_command *cmd, esqlite_thread *thread)
-{
-    int i, size;
-    const char *name;
-    ERL_NIF_TERM *array;
-    ERL_NIF_TERM column_names;
+// static ERL_NIF_TERM
+// do_column_names(esqlite_command *cmd, esqlite_thread *thread)
+// {
+//     int i, size;
+//     const char *name;
+//     ERL_NIF_TERM *array;
+//     ERL_NIF_TERM column_names;
      
-    size = sqlite3_column_count(cmd->stmt);
-    array = (ERL_NIF_TERM *) malloc(sizeof(ERL_NIF_TERM) * size);
+//     size = sqlite3_column_count(cmd->stmt);
+//     array = (ERL_NIF_TERM *) malloc(sizeof(ERL_NIF_TERM) * size);
      
-    if(!array)
-	    return make_error_tuple(cmd->env, "no_memory");
+//     if(!array)
+// 	    return make_error_tuple(cmd->env, "no_memory");
 
-    for(i = 0; i < size; i++) {
-	    name = sqlite3_column_name(cmd->stmt, i);
-	    array[i] = make_atom(cmd->env, name);
-    }
+//     for(i = 0; i < size; i++) {
+// 	    name = sqlite3_column_name(cmd->stmt, i);
+// 	    array[i] = make_atom(cmd->env, name);
+//     }
 
-    column_names = enif_make_tuple_from_array(cmd->env, array, size);
-    free(array);
-    return column_names;
-}
+//     column_names = enif_make_tuple_from_array(cmd->env, array, size);
+//     free(array);
+//     return column_names;
+// }
 
 static ERL_NIF_TERM
 do_close(esqlite_command *cmd,esqlite_thread *thread)
 {
     ERL_NIF_TERM ret;
     int rc;
-    
+
     sqlite3 *db = (sqlite3 *)cmd->p;
     rc = sqlite3_close(db);
 
@@ -1517,12 +1545,12 @@ evaluate_command(esqlite_command *cmd,esqlite_thread *thread)
         return do_exec_script(cmd,thread);
     case cmd_prepare:
 	    return do_prepare(cmd,thread);
-    case cmd_step:
-	    return do_step(cmd,thread);
-    case cmd_bind:
-	    return do_bind(cmd,thread);
-    case cmd_column_names:
-	    return do_column_names(cmd,thread);
+    // case cmd_step:
+	   //  return do_step(cmd,thread);
+    // case cmd_bind:
+	   //  return do_bind(cmd,thread);
+    // case cmd_column_names:
+	   //  return do_column_names(cmd,thread);
     case cmd_close:
 	    return do_close(cmd,thread);
     case cmd_backup_init:
@@ -2388,74 +2416,73 @@ esqlite_prepare(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     return push_command(conn->thread, item);
 }
 
-/*
- * Bind a variable to a prepared statement
- */
-static ERL_NIF_TERM 
-esqlite_bind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-{
-    esqlite_statement *stmt;
-    esqlite_command *cmd = NULL;
-    ErlNifPid pid;
-    void *item;
+// /*
+//  * Bind a variable to a prepared statement
+//  */
+// static ERL_NIF_TERM 
+// esqlite_bind(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+// {
+//     esqlite_command *cmd = NULL;
+//     ErlNifPid pid;
+//     void *item;
 
-    if(argc != 4) 
-	    return enif_make_badarg(env);
-    if(!enif_get_resource(env, argv[0], esqlite_statement_type, (void **) &stmt))
-	    return enif_make_badarg(env);
-    if(!enif_is_ref(env, argv[1])) 
-	    return make_error_tuple(env, "invalid_ref");
-    if(!enif_get_local_pid(env, argv[2], &pid)) 
-	    return make_error_tuple(env, "invalid_pid"); 
+//     if(argc != 4) 
+// 	    return enif_make_badarg(env);
+//     if(!enif_get_resource(env, argv[0], esqlite_statement_type, (void **) &stmt))
+// 	    return enif_make_badarg(env);
+//     if(!enif_is_ref(env, argv[1])) 
+// 	    return make_error_tuple(env, "invalid_ref");
+//     if(!enif_get_local_pid(env, argv[2], &pid)) 
+// 	    return make_error_tuple(env, "invalid_pid"); 
 
-    item = command_create(stmt->thread);
-    cmd = queue_get_item_data(item);
-    if(!cmd) 
-	    return make_error_tuple(env, "command_create_failed");
+//     item = command_create(stmt->thread);
+//     cmd = queue_get_item_data(item);
+//     if(!cmd) 
+// 	    return make_error_tuple(env, "command_create_failed");
 
-    cmd->type = cmd_bind;
-    cmd->ref = enif_make_copy(cmd->env, argv[1]);
-    cmd->pid = pid;
-    cmd->stmt = stmt->statement;
-    cmd->arg = enif_make_copy(cmd->env, argv[3]);
+//     cmd->type = cmd_bind;
+//     cmd->ref = enif_make_copy(cmd->env, argv[1]);
+//     cmd->pid = pid;
+//     cmd->stmt = stmt->statement;
+//     cmd->arg = enif_make_copy(cmd->env, argv[3]);
 
-    return push_command(stmt->thread, item);
-}
+//     return push_command(stmt->thread, item);
+// }
 
 /*
  * Step to a prepared statement
  */
-static ERL_NIF_TERM 
-esqlite_step(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-{
-    esqlite_statement *stmt;
-    esqlite_command *cmd = NULL;
-    ErlNifPid pid;
-    void *item;
+// static ERL_NIF_TERM 
+// esqlite_step(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+// {
+//     esqlite_statement *stmt;
+//     esqlite_command *cmd = NULL;
+//     ErlNifPid pid;
+//     void *item;
 
-    if(argc != 3) 
-	    return enif_make_badarg(env);
-    if(!enif_get_resource(env, argv[0], esqlite_statement_type, (void **) &stmt))
-	    return enif_make_badarg(env);
-    if(!enif_is_ref(env, argv[1])) 
-	    return make_error_tuple(env, "invalid_ref");
-    if(!enif_get_local_pid(env, argv[2], &pid)) 
-	    return make_error_tuple(env, "invalid_pid"); 
-    if(!stmt->statement) 
-	    return make_error_tuple(env, "no_prepared_statement");
+//     if(argc != 3) 
+// 	    return enif_make_badarg(env);
+//     if(!enif_get_resource(env, argv[0], esqlite_statement_type, (void **) &stmt))
+// 	    return enif_make_badarg(env);
+//     if(!enif_is_ref(env, argv[1])) 
+// 	    return make_error_tuple(env, "invalid_ref");
+//     if(!enif_get_local_pid(env, argv[2], &pid)) 
+// 	    return make_error_tuple(env, "invalid_pid"); 
+//     if(!stmt->statement) 
+// 	    return make_error_tuple(env, "no_prepared_statement");
 
-    item = command_create(stmt->thread);
-    cmd = queue_get_item_data(item);
-    if(!cmd) 
-        return make_error_tuple(env, "command_create_failed");
+//     item = command_create(stmt->thread);
+//     cmd = queue_get_item_data(item);
+//     if(!cmd) 
+//         return make_error_tuple(env, "command_create_failed");
 
-    cmd->type = cmd_step;
-    cmd->ref = enif_make_copy(cmd->env, argv[1]);
-    cmd->pid = pid;
-    cmd->stmt = stmt->statement;
+//     cmd->type = cmd_step;
+//     cmd->ref = enif_make_copy(cmd->env, argv[1]);
+//     cmd->pid = pid;
+//     cmd->stmt = stmt->statement;
 
-    return push_command(stmt->thread, item);
-}
+//     return push_command(stmt->thread, item);
+// }
 
 static ERL_NIF_TERM 
 esqlite_noop(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
@@ -2489,37 +2516,37 @@ esqlite_noop(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 /*
  * Step to a prepared statement
  */
-static ERL_NIF_TERM 
-esqlite_column_names(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
-{
-    esqlite_statement *stmt;
-    esqlite_command *cmd = NULL;
-    ErlNifPid pid;
-    void *item;
+// static ERL_NIF_TERM 
+// esqlite_column_names(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
+// {
+//     esqlite_statement *stmt;
+//     esqlite_command *cmd = NULL;
+//     ErlNifPid pid;
+//     void *item;
 
-    if(argc != 3) 
-	    return enif_make_badarg(env);
-    if(!enif_get_resource(env, argv[0], esqlite_statement_type, (void **) &stmt))
-	    return enif_make_badarg(env);
-    if(!enif_is_ref(env, argv[1])) 
-	    return make_error_tuple(env, "invalid_ref");
-    if(!enif_get_local_pid(env, argv[2], &pid)) 
-	    return make_error_tuple(env, "invalid_pid"); 
-    if(!stmt->statement) 
-	    return make_error_tuple(env, "no_prepared_statement");
+//     if(argc != 3) 
+// 	    return enif_make_badarg(env);
+//     if(!enif_get_resource(env, argv[0], esqlite_statement_type, (void **) &stmt))
+// 	    return enif_make_badarg(env);
+//     if(!enif_is_ref(env, argv[1])) 
+// 	    return make_error_tuple(env, "invalid_ref");
+//     if(!enif_get_local_pid(env, argv[2], &pid)) 
+// 	    return make_error_tuple(env, "invalid_pid"); 
+//     if(!stmt->statement) 
+// 	    return make_error_tuple(env, "no_prepared_statement");
 
-    item = command_create(stmt->thread);
-    cmd = queue_get_item_data(item);
-    if(!cmd) 
-        return make_error_tuple(env, "command_create_failed");
+//     item = command_create(stmt->thread);
+//     cmd = queue_get_item_data(item);
+//     if(!cmd) 
+//         return make_error_tuple(env, "command_create_failed");
 
-    cmd->type = cmd_column_names;
-    cmd->ref = enif_make_copy(cmd->env, argv[1]);
-    cmd->pid = pid;
-    cmd->stmt = stmt->statement;
+//     cmd->type = cmd_column_names;
+//     cmd->ref = enif_make_copy(cmd->env, argv[1]);
+//     cmd->pid = pid;
+//     cmd->stmt = stmt->statement;
 
-    return push_command(stmt->thread, item);
-}
+//     return push_command(stmt->thread, item);
+// }
 
 /*
  * Close the database
@@ -2605,12 +2632,6 @@ on_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
 	    return -1;
     esqlite_connection_type = rt;
 
-    rt =  enif_open_resource_type(env, "esqlite3_nif", "esqlite_statement_type",
-				   destruct_esqlite_statement, ERL_NIF_RT_CREATE, NULL);
-    if(!rt) 
-	    return -1;
-    esqlite_statement_type = rt;
-
     rt =  enif_open_resource_type(env, "esqlite3_nif", "esqlite_backup_type",
                    destruct_esqlite_backup, ERL_NIF_RT_CREATE, NULL);
     if(!rt) 
@@ -2674,11 +2695,11 @@ static ErlNifFunc nif_funcs[] = {
     {"exec_script", 8, esqlite_exec_script},
     {"bind_insert",5,esqlite_bind_insert},
     {"prepare", 4, esqlite_prepare},
-    {"step", 3, esqlite_step},
+    // {"step", 3, esqlite_step},
     {"noop", 3, esqlite_noop},
-    {"bind", 4, esqlite_bind},
+    // {"bind", 4, esqlite_bind},
     {"parse_helper",2,parse_helper},
-    {"column_names", 3, esqlite_column_names},
+    // {"column_names", 3, esqlite_column_names},
     {"close", 3, esqlite_close},
     {"wal_pages",1,esqlite_wal_pages},
     {"backup_init",4,esqlite_backup_init},

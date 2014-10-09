@@ -26,11 +26,11 @@
          exec/2,
          exec_script/2,exec_script/3,exec_script/6,exec_script/4,exec_script/7,
          prepare/2, 
-         step/1, 
-         bind/2, 
+         % step/1, 
+         % bind/2, 
          fetchone/1,
          fetchall/1,
-         column_names/1,
+         % column_names/1,
          close/1,
          parse_helper/1,parse_helper/2,wal_pages/1,
          backup_init/2,backup_step/2,backup_finish/1,backup_pages/1,
@@ -38,12 +38,12 @@
          replicate_opts/2,replicate_opts/3,replicate_status/1,tcp_connect/4,all_tunnel_call/1,
          tcp_connect_async/4,tcp_connect_async/5,make_wal_header/1,tcp_reconnect/0,wal_checksum/4,bind_insert/3]).
 
--export([q/2, q/3, map/3, foreach/3]).
+% -export([q/2, q/3, map/3, foreach/3]).
 
 %% 
 -type connection() :: tuple().
 -type statement() :: term().
--type sql() :: iolist().
+% -type sql() :: iolist().
 
 make_wal_header(PageSize) ->
     esqlite3_nif:wal_header(PageSize).
@@ -136,95 +136,95 @@ wal_pages({connection, _Ref, Connection}) ->
     esqlite3_nif:wal_pages(Connection).
 
 %% @doc Execute a sql statement, returns a list with tuples.
--spec q(sql(), connection()) -> list(tuple()).
-q(Sql, Connection) ->
-    q(Sql, [], Connection).
+% -spec q(sql(), connection()) -> list(tuple()).
+% q(Sql, Connection) ->
+%     q(Sql, [], Connection).
 
 %% @doc Execute statement, bind args and return a list with tuples as result.
--spec q(sql(), list(), connection()) -> list(tuple()).
-q(Sql, [], Connection) ->
-    case prepare(Sql, Connection) of
-        {ok, Statement} -> 
-            fetchall(Statement);
-        {error, _Msg}=Error -> 
-            throw(Error)
-    end;
-q(Sql, Args, Connection) ->
-    case prepare(Sql, Connection) of
-        {ok, Statement} ->
-            ok = bind(Statement, Args),
-            fetchall(Statement);
-        {error, _Msg}=Error -> 
-            throw(Error)
-    end.
+% -spec q(sql(), list(), connection()) -> list(tuple()).
+% q(Sql, [], Connection) ->
+%     case prepare(Sql, Connection) of
+%         {ok, Statement} -> 
+%             fetchall(Statement);
+%         {error, _Msg}=Error -> 
+%             throw(Error)
+%     end;
+% q(Sql, Args, Connection) ->
+%     case prepare(Sql, Connection) of
+%         {ok, Statement} ->
+%             ok = bind(Statement, Args),
+%             fetchall(Statement);
+%         {error, _Msg}=Error -> 
+%             throw(Error)
+%     end.
 
 %% @doc
--spec map(F, sql(), connection()) -> list(Type) when
-    F :: fun((Row) -> Type) | fun((ColumnNames, Row) -> Type),
-    Row :: tuple(),
-    ColumnNames :: tuple(),
-    Type :: any(). 
-map(F, Sql, Connection) ->
-    case prepare(Sql, Connection) of
-        {ok, Statement} ->
-            map_s(F, Statement);
-        {error, _Msg}=Error -> 
-            throw(Error)
-    end.
+% -spec map(F, sql(), connection()) -> list(Type) when
+%     F :: fun((Row) -> Type) | fun((ColumnNames, Row) -> Type),
+%     Row :: tuple(),
+%     ColumnNames :: tuple(),
+%     Type :: any(). 
+% map(F, Sql, Connection) ->
+%     case prepare(Sql, Connection) of
+%         {ok, Statement} ->
+%             map_s(F, Statement);
+%         {error, _Msg}=Error -> 
+%             throw(Error)
+%     end.
 
 %% @doc
--spec foreach(F, sql(), connection()) -> ok when
-    F :: fun((Row) -> any()) | fun((ColumnNames, Row) -> any()),
-    Row :: tuple(),
-    ColumnNames :: tuple().
-foreach(F, Sql, Connection) ->
-    case prepare(Sql, Connection) of
-        {ok, Statement} ->
-            foreach_s(F, Statement);
-        {error, _Msg}=Error ->
-            throw(Error)
-    end.
+% -spec foreach(F, sql(), connection()) -> ok when
+%     F :: fun((Row) -> any()) | fun((ColumnNames, Row) -> any()),
+%     Row :: tuple(),
+%     ColumnNames :: tuple().
+% foreach(F, Sql, Connection) ->
+%     case prepare(Sql, Connection) of
+%         {ok, Statement} ->
+%             foreach_s(F, Statement);
+%         {error, _Msg}=Error ->
+%             throw(Error)
+% end.
+
+% %%
+% -spec foreach_s(F, statement()) -> ok when
+%     F :: fun((Row) -> any()) | fun((ColumnNames, Row) -> any()),
+%     Row :: tuple(),
+%     ColumnNames :: tuple().
+% foreach_s(F, Statement) when is_function(F, 1) -> 
+%     case try_step(Statement, 0) of
+%         '$done' -> ok;
+%         {row, Row} ->
+%             F(Row),
+%             foreach_s(F, Statement)
+%     end;
+% foreach_s(F, Statement) when is_function(F, 2) ->
+%     ColumnNames = column_names(Statement),
+%     case try_step(Statement, 0) of
+%         '$done' -> ok;
+%         {row, Row} -> 
+%             F(ColumnNames, Row),
+%             foreach_s(F, Statement)
+%     end.
 
 %%
--spec foreach_s(F, statement()) -> ok when
-    F :: fun((Row) -> any()) | fun((ColumnNames, Row) -> any()),
-    Row :: tuple(),
-    ColumnNames :: tuple().
-foreach_s(F, Statement) when is_function(F, 1) -> 
-    case try_step(Statement, 0) of
-        '$done' -> ok;
-        {row, Row} ->
-            F(Row),
-            foreach_s(F, Statement)
-    end;
-foreach_s(F, Statement) when is_function(F, 2) ->
-    ColumnNames = column_names(Statement),
-    case try_step(Statement, 0) of
-        '$done' -> ok;
-        {row, Row} -> 
-            F(ColumnNames, Row),
-            foreach_s(F, Statement)
-    end.
-
-%%
--spec map_s(F, statement()) -> list(Type) when
-    F :: fun((Row) -> Type) | fun((ColumnNames, Row) -> Type),
-    Row :: tuple(),
-    ColumnNames :: tuple(),
-    Type :: term().
-map_s(F, Statement) when is_function(F, 1) ->
-    case try_step(Statement, 0) of
-        '$done' -> [];
-        {row, Row} -> 
-            [F(Row) | map_s(F, Statement)]
-    end;
-map_s(F, Statement) when is_function(F, 2) ->
-    ColumnNames = column_names(Statement),
-    case try_step(Statement, 0) of
-        '$done' -> [];
-        {row, Row} -> 
-            [F(ColumnNames, Row) | map_s(F, Statement)]
-    end.
+% -spec map_s(F, statement()) -> list(Type) when
+%     F :: fun((Row) -> Type) | fun((ColumnNames, Row) -> Type),
+%     Row :: tuple(),
+%     ColumnNames :: tuple(),
+%     Type :: term().
+% map_s(F, Statement) when is_function(F, 1) ->
+%     case try_step(Statement, 0) of
+%         '$done' -> [];
+%         {row, Row} -> 
+%             [F(Row) | map_s(F, Statement)]
+%     end;
+% map_s(F, Statement) when is_function(F, 2) ->
+%     ColumnNames = column_names(Statement),
+%     case try_step(Statement, 0) of
+%         '$done' -> [];
+%         {row, Row} -> 
+%             [F(ColumnNames, Row) | map_s(F, Statement)]
+%     end.
 
 %%
 -spec fetchone(statement()) -> tuple().
@@ -330,26 +330,26 @@ prepare(Sql,  {connection, _Ref, Connection}) ->
 %% @doc Step
 %%
 %% @spec step(prepared_statement()) -> tuple()
-step(Stmt) ->
-    Ref = make_ref(),
-    ok = esqlite3_nif:step(Stmt, Ref, self()),
-    receive_answer(Ref).
+% step(Stmt) ->
+%     Ref = make_ref(),
+%     ok = esqlite3_nif:step(Stmt, Ref, self()),
+%     receive_answer(Ref).
 
 %% @doc Bind values to prepared statements
 %%
 %% @spec bind(prepared_statement(), value_list()) -> ok | {error, error_message()}
-bind(Stmt, Args) ->
-    Ref = make_ref(),
-    ok = esqlite3_nif:bind(Stmt, Ref, self(), Args),
-    receive_answer(Ref).
+% bind(Stmt, Args) ->
+%     Ref = make_ref(),
+%     ok = esqlite3_nif:bind(Stmt, Ref, self(), Args),
+%     receive_answer(Ref).
 
 %% @doc Return the column names of the prepared statement.
 %%
--spec column_names(statement()) -> tuple(atom()).
-column_names(Stmt) ->
-    Ref = make_ref(),
-    ok = esqlite3_nif:column_names(Stmt, Ref, self()),
-    receive_answer(Ref).
+% -spec column_names(statement()) -> tuple(atom()).
+% column_names(Stmt) ->
+%     Ref = make_ref(),
+%     ok = esqlite3_nif:column_names(Stmt, Ref, self()),
+%     receive_answer(Ref).
 
 %% @doc Close the database
 %%
