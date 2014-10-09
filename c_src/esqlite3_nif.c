@@ -233,11 +233,11 @@ make_error_tuple(ErlNifEnv *env, const char *reason)
     return enif_make_tuple2(env, atom_error, make_atom(env, reason));
 }
 
-static ERL_NIF_TERM 
-make_row_tuple(ErlNifEnv *env, ERL_NIF_TERM value) 
-{
-    return enif_make_tuple2(env, make_atom(env, "row"), value);
-}
+// static ERL_NIF_TERM 
+// make_row_tuple(ErlNifEnv *env, ERL_NIF_TERM value) 
+// {
+//     return enif_make_tuple2(env, make_atom(env, "row"), value);
+// }
 
 
 int 
@@ -1119,7 +1119,7 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
              (readpoint[skip+2] == 'n' || readpoint[skip+2] == 'N')) ||
             (statementlen >= 4 && cmd->arg4 && readpoint[skip] == '#' && readpoint[skip+3] == ';'))
         {
-            if (readpoint[skip] == '#')
+            if (readpoint[skip] != '#')
             {
                 rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip+1), statementlen, &(statement), &readpoint);
                 if(rc != SQLITE_OK)
@@ -1433,26 +1433,26 @@ make_cell(ErlNifEnv *env, sqlite3_stmt *statement, unsigned int i)
     }
 }
 
-static ERL_NIF_TERM
-make_row(ErlNifEnv *env, sqlite3_stmt *statement) 
-{
-    int i, size;
-    ERL_NIF_TERM *array;
-    ERL_NIF_TERM row;
+// static ERL_NIF_TERM
+// make_row(ErlNifEnv *env, sqlite3_stmt *statement) 
+// {
+//     int i, size;
+//     ERL_NIF_TERM *array;
+//     ERL_NIF_TERM row;
      
-    size = sqlite3_column_count(statement);
-    array = (ERL_NIF_TERM *) malloc(sizeof(ERL_NIF_TERM)*size);
+//     size = sqlite3_column_count(statement);
+//     array = (ERL_NIF_TERM *) malloc(sizeof(ERL_NIF_TERM)*size);
 
-    if(!array) 
-	    return make_error_tuple(env, "no_memory");
+//     if(!array) 
+// 	    return make_error_tuple(env, "no_memory");
 
-    for(i = 0; i < size; i++) 
-	    array[i] = make_cell(env, statement, i);
+//     for(i = 0; i < size; i++) 
+// 	    array[i] = make_cell(env, statement, i);
 
-    row = make_row_tuple(env, enif_make_tuple_from_array(env, array, size));
-    free(array);
-    return row;
-}
+//     row = make_row_tuple(env, enif_make_tuple_from_array(env, array, size));
+//     free(array);
+//     return row;
+// }
 
 // static ERL_NIF_TERM
 // do_step(esqlite_command *cmd, esqlite_thread *thread)
