@@ -1115,37 +1115,22 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
         statementlen = end-readpoint;
         
         // if _insert, then this is a prepared statement with multiple rows in arg4
-        if ((statementlen >= 8 && cmd->arg4 && readpoint[skip] == '_' && (readpoint[skip+1] == 'i' || readpoint[skip+1] == 'I') &&
-             (readpoint[skip+2] == 'n' || readpoint[skip+2] == 'N')) ||
-            (statementlen >= 4 && cmd->arg4 && readpoint[skip] == '#' && readpoint[skip+3] == ';'))
+        if (statementlen >= 8 && cmd->arg4 && readpoint[skip] == '_' && (readpoint[skip+1] == 'i' || readpoint[skip+1] == 'I') &&
+             (readpoint[skip+2] == 'n' || readpoint[skip+2] == 'N'))
         {
-            if (readpoint[skip] != '#')
+            rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip+1), statementlen, &(statement), &readpoint);
+            if(rc != SQLITE_OK)
             {
-                rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip+1), statementlen, &(statement), &readpoint);
-                if(rc != SQLITE_OK)
-                {
-                    errat = "_prepare";
-                    sqlite3_finalize(statement);
-                    break;
-                }
-                rc = SQLITE_DONE;
+                errat = "_prepare";
+                sqlite3_finalize(statement);
+                break;
             }
-            else
-            {
-                i = (readpoint[skip+1] - '0')*10 + (readpoint[skip+2]-'0');
-                if (i > cmd->conn->nprepared)
-                {
-                    rc = SQLITE_INTERRUPT;
-                    break;
-                }
-                statement = cmd->conn->prepared[i];
-            }
+            rc = SQLITE_DONE;
 
             if (!enif_get_list_cell(cmd->env, listTop, &headTop, &listTop))
             {
                 rc = SQLITE_INTERRUPT;
-                if (readpoint[skip] != '#')
-                    sqlite3_finalize(statement);
+                sqlite3_finalize(statement);
                 break;
             }
 
@@ -1164,8 +1149,7 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
                     if (bind_cell(cmd->env, insertRow[i], statement, i) == -1)
                     {
                         errat = "cant_bind";
-                        if (readpoint[skip] != '#')
-                            sqlite3_finalize(statement);
+                        sqlite3_finalize(statement);
                         break;                        
                     }
                 }
@@ -1173,8 +1157,7 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
                 sqlite3_reset(statement);
             }
 
-            if (readpoint[skip] != '#')
-                sqlite3_finalize(statement);
+            sqlite3_finalize(statement);
         }
         // if (statementlen >= 4 && cmd->arg4 && readpoint[skip] == '#' && readpoint[skip+3] == ';')
         // {
