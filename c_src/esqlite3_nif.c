@@ -1118,7 +1118,8 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
         if (statementlen >= 8 && cmd->arg4 && readpoint[skip] == '_' && (readpoint[skip+1] == 'i' || readpoint[skip+1] == 'I') &&
              (readpoint[skip+2] == 'n' || readpoint[skip+2] == 'N'))
         {
-            rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip+1), statementlen, &(statement), &readpoint);
+            skip++;
+            rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, &(statement), &readpoint);
             if(rc != SQLITE_OK)
             {
                 errat = "_prepare";
