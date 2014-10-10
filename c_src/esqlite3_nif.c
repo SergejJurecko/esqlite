@@ -1157,8 +1157,6 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
                 rc = sqlite3_step(statement);
                 sqlite3_reset(statement);
             }
-
-            sqlite3_finalize(statement);
         }
         // if (statementlen >= 4 && cmd->arg4 && readpoint[skip] == '#' && readpoint[skip+3] == ';')
         // {
