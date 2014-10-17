@@ -1175,12 +1175,15 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
         // }
         else
         {
-            if (statementlen >= 5 && readpoint[skip] == '#' && (readpoint[skip+1] == 's' || readpoint[skip+1] == 'd') &&
+            if (statementlen >= 5 && readpoint[skip] == '#' && 
+                    (readpoint[skip+1] == 's' || readpoint[skip+1] == 'r' || readpoint[skip+1] == 'd') &&
                     readpoint[skip+4] == ';')
             {
                 i = (readpoint[skip+2] - '0')*10 + (readpoint[skip+3] - '0');
                 dofinalize = 0;
-                skip = 1;
+
+                if (readpoint[skip+1] == 's')
+                    skip = 1;
 
                 if (cmd->conn->staticPrepared[i] == NULL)
                 {
