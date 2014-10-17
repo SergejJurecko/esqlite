@@ -1264,11 +1264,12 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
             }
             else
             {
+                dofinalize = 1;
                 rc = sqlite3_prepare_v2(cmd->conn->db, (char *)(readpoint+skip), statementlen, &(statement), &readpoint);
                 if(rc != SQLITE_OK)
                 {
                     errat = "prepare";
-                    dofinalize ? sqlite3_finalize(statement) : sqlite3_reset(statement);
+                    sqlite3_finalize(statement);
                     break;
                 }
             }
