@@ -116,7 +116,7 @@ backup_step(_,_,_,_) ->
 backup_pages(_) ->
     exit(nif_library_not_loaded).
 
-init(Threads) when is_integer(Threads) ->
+init(Threads) when is_integer(Threads); is_integer(element(1,Threads)) ->
     NifName = "esqlite3_nif",
     NifFileName = case code:priv_dir(esqlite) of
         {error, bad_name} -> filename:join("priv", NifName);
@@ -187,8 +187,8 @@ prepare(_Db, _Ref, _Dest, _Sql) ->
 %% @doc
 %%
 %% @spec step(statement(), reference(), pid()) -> ok | {error, message()}
-step(_Stmt, _Ref, _Dest) ->
-    exit(nif_library_not_loaded).
+% step(_Stmt, _Ref, _Dest) ->
+%     exit(nif_library_not_loaded).
 
 %% @doc
 %%
@@ -199,14 +199,14 @@ step(_Stmt, _Ref, _Dest) ->
 %% @doc Bind parameters to a prepared statement. 
 %%
 %% @spec bind(statement(), reference(), pid(), []) -> ok | {error, message()} 
-bind(_Stmt, _Ref, _Dest, _Args) ->
-    exit(nif_library_not_loaded).
+% bind(_Stmt, _Ref, _Dest, _Args) ->
+%     exit(nif_library_not_loaded).
 
 %% @doc Retrieve the column names of the prepared statement
 %%
 %% @spec column_names(statement(), reference(), pid()) -> {ok, tuple()} | {error, message()} 
-column_names(_Stmt, _Ref, _Dest) ->
-    exit(nif_library_not_loaded).
+% column_names(_Stmt, _Ref, _Dest) ->
+%     exit(nif_library_not_loaded).
 
 %% @doc Close the connection.
 %%

@@ -126,7 +126,7 @@ open(Filename,ThreadNumber,Sql) ->
     end.
 
 -spec init(Threads) -> ok when
-    Threads :: integer().
+    Threads :: integer() | {integer(), tuple()}.
 init(Threads) ->
     esqlite3_nif:init(Threads).
 
