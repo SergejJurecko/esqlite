@@ -24,14 +24,15 @@
 -export([init/1,
          open/4, 
          open/5,
-         exec/4, 
+         % exec/4, 
          exec_script/7, 
          exec_script/8,
-         prepare/4,
+         % prepare/4,
          % step/3,
          % finalize/3,
          % bind/4,
          % column_names/3,
+         store_prepared_table/2,
          close/3,
          noop/3,
          parse_helper/2,
@@ -55,6 +56,9 @@
          bind_insert/5,
          all_tunnel_call/3
 ]).
+
+store_prepared_table(_,_) ->
+    exit(nif_library_not_loaded).
 
 all_tunnel_call(_,_,_) ->
     exit(nif_library_not_loaded).
@@ -160,8 +164,8 @@ open(_Ref, _Dest, _Filename,_ThreadNumber,_Sql) ->
 %% with answer() integer | {error, reason()}
 %%
 %%  @spec exec(connection(), Ref::reference(), Dest::pid(), string()) -> ok | {error, message()}
-exec(_Db, _Ref, _Dest, _Sql) ->
-    exit(nif_library_not_loaded).
+% exec(_Db, _Ref, _Dest, _Sql) ->
+%     exit(nif_library_not_loaded).
 
 %% @doc Exec the query.
 %% 
@@ -181,8 +185,8 @@ exec_script(_Db, _Ref, _Dest, _Sql,_Term,_Index,_AParam,_RecordInsert) ->
 %% @doc
 %%
 %% @spec prepare(connection(), reference(), pid(), string()) -> ok | {error, message()}
-prepare(_Db, _Ref, _Dest, _Sql) ->
-    exit(nif_library_not_loaded).
+% prepare(_Db, _Ref, _Dest, _Sql) ->
+%     exit(nif_library_not_loaded).
 
 %% @doc
 %%

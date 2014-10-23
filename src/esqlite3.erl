@@ -23,14 +23,15 @@
 %% higher-level export
 -export([init/1,noop/1,
          open/1,open/2,open/3,
-         exec/2,
+         % exec/2,
          exec_script/2,exec_script/3,exec_script/6,exec_script/4,exec_script/7,
-         prepare/2, 
+         % prepare/2, 
          % step/1, 
          % bind/2, 
          fetchone/1,
          fetchall/1,
          % column_names/1,
+         store_prepared_table/2,
          close/1,
          parse_helper/1,parse_helper/2,wal_pages/1,
          backup_init/2,backup_step/2,backup_finish/1,backup_pages/1,
@@ -44,6 +45,9 @@
 -type connection() :: tuple().
 -type statement() :: term().
 % -type sql() :: iolist().
+
+store_prepared_table(Indexes,Sqls) when is_tuple(Indexes), is_tuple(Sqls), tuple_size(Indexes) == tuple_size(Sqls) ->
+    esqlite3_nif:store_prepared_table(Indexes,Sqls).
 
 make_wal_header(PageSize) ->
     esqlite3_nif:wal_header(PageSize).
@@ -260,10 +264,10 @@ try_step(Statement, Tries) ->
 %% @doc Execute Sql statement, returns the number of affected rows.
 %%
 %% @spec exec(iolist(), connection()) -> integer() |  {error, error_message()}
-exec(Sql,  {connection, _Ref, Connection}) ->
-    Ref = make_ref(),
-    ok = esqlite3_nif:exec(Connection, Ref, self(), add_eos(Sql)),
-    receive_answer(Ref).
+% exec(Sql,  {connection, _Ref, Connection}) ->
+%     Ref = make_ref(),
+%     ok = esqlite3_nif:exec(Connection, Ref, self(), add_eos(Sql)),
+%     receive_answer(Ref).
 
 noop({connection, _Ref, Connection}) ->
     Ref = make_ref(),
@@ -322,10 +326,10 @@ backup_pages({backup, _Ref, B}) ->
 %% @doc Prepare a statement
 %%
 %% @spec prepare(iolist(), connection()) -> {ok, prepared_statement()} | {error, error_message()}
-prepare(Sql,  {connection, _Ref, Connection}) ->
-    Ref = make_ref(),
-    ok = esqlite3_nif:prepare(Connection, Ref, self(), add_eos(Sql)),
-    receive_answer(Ref).
+% prepare(Sql,  {connection, _Ref, Connection}) ->
+%     Ref = make_ref(),
+%     ok = esqlite3_nif:prepare(Connection, Ref, self(), add_eos(Sql)),
+%     receive_answer(Ref).
 
 %% @doc Step
 %%
@@ -362,8 +366,8 @@ close( {connection, _Ref, _Connection}) ->
     % receive_answer(Ref).
 
 %% Internal functions
-add_eos(IoList) ->
-    [IoList, 0].
+% add_eos(IoList) ->
+%     [IoList, 0].
 
 receive_answer(Ref) ->
     receive 

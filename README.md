@@ -22,8 +22,11 @@ the command has been added to the command-queue of the thread.
 Fork changes
 -----------------
 
+- Heavily modified to suit the needs of ActorDB
 - Uses a fixed threading model instead of a new thread for every db connection.
 Init call sets number of threads, every open call can set which thread 
 that particular sqlite connection should execute on.
-- Added exec_script which will execute multiple statements at once and return proper values (not just ok).
+- Added exec_script which will execute multiple statements at once and return proper values (not just ok). 
+Removed other methods of invoking sqlite.
 - Supports the backup api 
+
