@@ -24,14 +24,8 @@
 -export([init/1,
          open/4, 
          open/5,
-         % exec/4, 
          exec_script/7, 
          exec_script/8,
-         % prepare/4,
-         % step/3,
-         % finalize/3,
-         % bind/4,
-         % column_names/3,
          store_prepared_table/2,
          close/3,
          noop/3,
@@ -138,12 +132,6 @@ init(Threads) when is_integer(Threads); is_integer(element(1,Threads)) ->
 wal_pages(_) ->
     exit(nif_library_not_loaded).
 
-%% @doc Start a low level thread which will can handle sqlite3 calls. 
-%%
-%% @spec start() -> {ok, connection()} | {error, msg()}
-% start() ->
-%     exit(nif_library_not_loaded).
-
 %% @doc Open the specified sqlite3 database.
 %% 
 %% Sends an asynchronous open command over the connection and returns
@@ -155,17 +143,6 @@ open(_Ref, _Dest, _Filename,_ThreadNumber) ->
 open(_Ref, _Dest, _Filename,_ThreadNumber,_Sql) ->
     exit(nif_library_not_loaded).
 
-%% @doc Exec the query.
-%% 
-%% Sends an asynchronous exec command over the connection and returns
-%% ok immediately.
-%%
-%% When the statement is executed Dest will receive message {Ref, answer()}
-%% with answer() integer | {error, reason()}
-%%
-%%  @spec exec(connection(), Ref::reference(), Dest::pid(), string()) -> ok | {error, message()}
-% exec(_Db, _Ref, _Dest, _Sql) ->
-%     exit(nif_library_not_loaded).
 
 %% @doc Exec the query.
 %% 
@@ -182,35 +159,6 @@ exec_script(_Db, _Ref, _Dest, _Sql,_Term,_Index,_AParam) ->
 exec_script(_Db, _Ref, _Dest, _Sql,_Term,_Index,_AParam,_RecordInsert) ->
     exit(nif_library_not_loaded).
 
-%% @doc
-%%
-%% @spec prepare(connection(), reference(), pid(), string()) -> ok | {error, message()}
-% prepare(_Db, _Ref, _Dest, _Sql) ->
-%     exit(nif_library_not_loaded).
-
-%% @doc
-%%
-%% @spec step(statement(), reference(), pid()) -> ok | {error, message()}
-% step(_Stmt, _Ref, _Dest) ->
-%     exit(nif_library_not_loaded).
-
-%% @doc
-%%
-%%
-% finalize(_Stmt, _Ref, _Dest) ->
-%     exit(nif_library_not_loaded).
-
-%% @doc Bind parameters to a prepared statement. 
-%%
-%% @spec bind(statement(), reference(), pid(), []) -> ok | {error, message()} 
-% bind(_Stmt, _Ref, _Dest, _Args) ->
-%     exit(nif_library_not_loaded).
-
-%% @doc Retrieve the column names of the prepared statement
-%%
-%% @spec column_names(statement(), reference(), pid()) -> {ok, tuple()} | {error, message()} 
-% column_names(_Stmt, _Ref, _Dest) ->
-%     exit(nif_library_not_loaded).
 
 %% @doc Close the connection.
 %%
