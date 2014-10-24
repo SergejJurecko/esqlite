@@ -657,26 +657,28 @@ destruct_esqlite_connection(ErlNifEnv *env, void *arg)
     {
         for (i = 0; i < MAX_PREP_SQLS; i++)
         {
-            sqlite3_finalize(conn->prepared[i]);
+            if (conn->prepared[i] != 0)
+            {
+                sqlite3_finalize(conn->prepared[i]);
+            }
+                
             conn->prepared[i] = NULL;
         }
+        free(conn->prepVersions);
+        conn->prepVersions = NULL;
     }
+    free(conn->prepared);
+    conn->prepared = NULL;
     for (i = 0; i < MAX_STATIC_SQLS; i++)
     {
         sqlite3_finalize(conn->staticPrepared[i]);
         conn->staticPrepared[i] = NULL;
     }
-
-    free(conn->prepared);
-    conn->prepared = NULL;
-
-    // enif_release_resource(cmd->conn);
     
     item = command_create(conn->thread);
     cmd = queue_get_item_data(item);
 
-    /* Send the stop command 
-     */
+
     cmd->type = cmd_close;
     cmd->p = conn->db;
     cmd->ref = 0;
@@ -1268,7 +1270,9 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
                     if (cmd->conn->prepared == NULL)
                     {
                         cmd->conn->prepared = malloc(MAX_PREP_SQLS*sizeof(sqlite3_stmt*));
-                        memset(cmd->conn->prepared,0,sizeof(MAX_PREP_SQLS*sizeof(sqlite3_stmt*)));
+                        memset(cmd->conn->prepared,0,MAX_PREP_SQLS*sizeof(sqlite3_stmt*));
+                        cmd->conn->prepVersions = malloc(MAX_PREP_SQLS*sizeof(int));
+                        memset(cmd->conn->prepVersions,0,MAX_PREP_SQLS*sizeof(int));
                     }
 
                     if (cmd->conn->prepared[rowLen] == NULL || cmd->conn->prepVersions[rowLen] != thread->prepVersions[i][rowLen])
@@ -1361,7 +1365,10 @@ do_exec_script(esqlite_command *cmd, esqlite_thread *thread)
                     else
                     {
                         headTop = 0;
-                        readpoint += 5;
+                        if (readpoint[skip+1] == 'r' || readpoint[skip+1] == 'w')
+                            readpoint += 7;
+                        else
+                            readpoint += 5;
                         continue;
                     }
                 }
