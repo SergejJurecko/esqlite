@@ -499,10 +499,10 @@ do_store_prepared_table(esqlite_command *cmd,esqlite_thread *thread)
 
     // {{1,2,2,0,0,..},{0,0,0,0,...}}
     if (!enif_get_tuple(cmd->env, cmd->arg, &tupleSize, &versTuple))
-        return false;
+        return atom_false;
     // {{"select....","insert into..."},{"select....","update ...."}}
     if (!enif_get_tuple(cmd->env, cmd->arg1, &tupleSize, &sqlTuple))
-        return false;
+        return atom_false;
 
     if (tupleSize > MAX_PREP_SQLS)
         return atom_false;
