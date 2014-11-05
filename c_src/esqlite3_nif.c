@@ -62,7 +62,7 @@
 #define PAGE_BUFF_SIZE 9000
 #define MAX_CONNECTIONS 8
 #define PACKET_ITEMS 9
-#define MAX_STATIC_SQLS 10
+#define MAX_STATIC_SQLS 11
 #define MAX_PREP_SQLS 100
 
 static ErlNifResourceType *esqlite_connection_type = NULL;
